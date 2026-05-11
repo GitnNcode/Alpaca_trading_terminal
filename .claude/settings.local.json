@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(mkdir -p \"c:\\\\Users\\\\Aditya\\\\adi-js\\\\Alpaca\\\\tcell-app\\\\.vscode\")",
+      "Bash(go build *)",
+      "Bash(mkdir -p \"c:\\\\Users\\\\Aditya\\\\adi-js\\\\Alpaca\\\\tcell-app\\\\bin\")",
+      "Bash(cp .env bin/.env)",
+      "Bash(go mod *)"
+    ],
+    "additionalDirectories": [
+      "c:\\Users\\Aditya\\adi-js\\Alpaca\\tcell-app"
+    ]
+  }
+}

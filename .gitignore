@@ -1,0 +1,32 @@
+# ── Credentials & secrets ─────────────────────────────────────────────────────
+.env
+*.env
+env.txt
+bin/env.txt
+bin/.env
+credentials.json
+
+# ── Trade logs (user-specific, not for repo) ──────────────────────────────────
+trades.csv
+
+# ── Go ────────────────────────────────────────────────────────────────────────
+*.test
+*.prof
+/vendor/
+
+# ── OS ────────────────────────────────────────────────────────────────────────
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+desktop.ini
+ehthumbs.db
+
+# ── IDE ───────────────────────────────────────────────────────────────────────
+.idea/
+*.sublime-workspace
+*.sublime-project
+*.swp
+*.swo
