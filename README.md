@@ -10,7 +10,8 @@ A Bloomberg-style terminal trading application built in Go. Runs entirely in the
 
 ## Screenshots
 
-> _Add screenshots here_
+<img width="1466" height="702" alt="Screenshot 2026-05-10 235544" src="https://github.com/user-attachments/assets/b3016e77-2fc8-4031-985b-7521ba6f8d00" />
+<img width="2558" height="1371" alt="Screenshot 2026-05-10 232340" src="https://github.com/user-attachments/assets/42f8bdd6-bcd0-4a1e-a647-95bda92956f6" />
 
 ---
 
