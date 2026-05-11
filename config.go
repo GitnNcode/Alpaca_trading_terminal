@@ -65,7 +65,7 @@ func deleteCredentials() {
 func runSetup() Credentials {
 	tview.Styles = tview.Theme{
 		PrimitiveBackgroundColor:    cBlack,
-		ContrastBackgroundColor:     cDark,
+		ContrastBackgroundColor:     tcell.NewRGBColor(55, 55, 55),
 		MoreContrastBackgroundColor: cBlack,
 		BorderColor:                 cOrange,
 		TitleColor:                  cOrange,

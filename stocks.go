@@ -37,9 +37,17 @@ func loadAssets() {
 	assetMu.Unlock()
 }
 
+// getCompanyName returns the full company name for a ticker symbol, or "".
+func getCompanyName(sym string) string {
+	assetMu.RLock()
+	defer assetMu.RUnlock()
+	return assetNames[sym]
+}
+
 // filterStocks returns up to limit autocomplete entries matching prefix.
-// Each entry is "SYMBOL  Company Name" so the caller must strip back to the
-// ticker on selection. Uses binary search since the slice is sorted.
+// It first does a fast binary-search for ticker prefix matches, then falls
+// back to a linear company-name substring scan to support typing full names.
+// Each entry is "SYMBOL  Company Name"; the caller strips to the ticker on selection.
 func filterStocks(prefix string, limit int) []string {
 	prefix = strings.ToUpper(prefix)
 
@@ -50,21 +58,45 @@ func filterStocks(prefix string, limit int) []string {
 		return nil
 	}
 
-	start := sort.SearchStrings(assetSymbols, prefix)
+	seen := make(map[string]bool)
 	var out []string
+
+	// Fast path: binary search for ticker-prefix matches
+	start := sort.SearchStrings(assetSymbols, prefix)
 	for i := start; i < len(assetSymbols) && len(out) < limit; i++ {
 		sym := assetSymbols[i]
 		if !strings.HasPrefix(sym, prefix) {
 			break
 		}
-		display := sym
-		if name := assetNames[sym]; name != "" {
-			if len(name) > 38 {
-				name = name[:35] + "…"
-			}
-			display = sym + "  " + name
+		seen[sym] = true
+		name := assetNames[sym]
+		if len(name) > 38 {
+			name = name[:35] + "…"
 		}
-		out = append(out, display)
+		out = append(out, sym+"  "+name)
 	}
+
+	// Slow path: scan company names for substring matches (supports typing "Apple" etc.)
+	if len(out) < limit {
+		lower := strings.ToLower(prefix)
+		for _, sym := range assetSymbols {
+			if len(out) >= limit {
+				break
+			}
+			if seen[sym] {
+				continue
+			}
+			name := assetNames[sym]
+			if strings.Contains(strings.ToLower(name), lower) {
+				seen[sym] = true
+				display := name
+				if len(display) > 38 {
+					display = display[:35] + "…"
+				}
+				out = append(out, sym+"  "+display)
+			}
+		}
+	}
+
 	return out
 }

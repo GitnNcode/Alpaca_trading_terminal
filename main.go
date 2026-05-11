@@ -52,6 +52,7 @@ type termApp struct {
 	resultTV    *tview.TextView
 	indicatorTV   *tview.TextView
 	activityTable *tview.Table
+	companyTV     *tview.TextView
 
 	symField   *tview.InputField
 	qtyField   *tview.InputField
@@ -59,16 +60,17 @@ type termApp struct {
 	actionDD   *tview.DropDown
 	typeDD     *tview.DropDown
 
-	activeTab     int
-	account       Account
-	confirmActive bool
-	stopCh        chan struct{}
+	activeTab        int
+	account          Account
+	confirmActive    bool
+	autocompleteOpen bool // true while symField autocomplete list is visible
+	stopCh           chan struct{}
 }
 
 func newTermApp() *termApp {
 	tview.Styles = tview.Theme{
 		PrimitiveBackgroundColor:    cBlack,
-		ContrastBackgroundColor:     cDark,
+		ContrastBackgroundColor:     tcell.NewRGBColor(55, 55, 55),
 		MoreContrastBackgroundColor: cBlack,
 		BorderColor:                 cOrange,
 		TitleColor:                  cOrange,
@@ -110,6 +112,7 @@ func (a *termApp) build() {
 
 	tradePage := tview.NewFlex().SetDirection(tview.FlexRow).
 		AddItem(a.form, 0, 1, true).
+		AddItem(a.companyTV, 1, 0, false).
 		AddItem(a.resultTV, 2, 0, false)
 
 	a.pages = tview.NewPages().
@@ -278,6 +281,10 @@ func (a *termApp) buildActivityTable() {
 }
 
 func (a *termApp) buildTradeForm() {
+	// Company name display line (shown below SYMBOL field after selection)
+	a.companyTV = tview.NewTextView().SetDynamicColors(true)
+	a.companyTV.SetBackgroundColor(cBlack)
+
 	a.form = tview.NewForm()
 	a.form.SetBackgroundColor(cBlack)
 	a.form.
@@ -306,8 +313,9 @@ func (a *termApp) buildTradeForm() {
 	a.qtyField = a.form.GetFormItem(3).(*tview.InputField)
 	a.priceField = a.form.GetFormItem(4).(*tview.InputField)
 
-	// Explicit dropdown list styling so options are visible against dark theme
-	listStyle := tcell.StyleDefault.Foreground(cWhite).Background(cDark)
+	// Distinct popup list background so it fully overwrites underlying text
+	listBg := tcell.NewRGBColor(40, 40, 40)
+	listStyle := tcell.StyleDefault.Foreground(cWhite).Background(listBg)
 	selectedStyle := tcell.StyleDefault.Foreground(cBlack).Background(cCyan).Attributes(tcell.AttrBold)
 	a.actionDD.SetListStyles(listStyle, selectedStyle)
 	a.typeDD.SetListStyles(listStyle, selectedStyle)
@@ -322,27 +330,60 @@ func (a *termApp) buildTradeForm() {
 	a.priceField.SetPlaceholder("not used for market orders")
 	a.priceField.SetPlaceholderStyle(tcell.StyleDefault.Foreground(cGray))
 
+	// Autocomplete: search by ticker prefix and company name substring.
+	// Track open/closed state so globalKeys can decide whether Down should
+	// navigate the list (open) or move to the next form field (closed).
 	a.symField.SetAutocompleteFunc(func(text string) []string {
 		upper := strings.ToUpper(strings.TrimSpace(text))
 		if upper == "" {
+			a.autocompleteOpen = false
 			return nil
 		}
-		return filterStocks(upper, 10)
+		results := filterStocks(upper, 10)
+		a.autocompleteOpen = len(results) > 0
+		return results
 	})
 	a.symField.SetAutocompletedFunc(func(text string, _ int, source int) bool {
 		if source != tview.AutocompletedNavigate {
-			// text may be "AAPL  Apple Inc." — take only the ticker token
 			sym := strings.ToUpper(strings.Fields(text)[0])
 			a.symField.SetText(sym)
+			a.autocompleteOpen = false // list just closed via selection
 			return true
 		}
 		return false
 	})
 	a.symField.SetAutocompleteStyles(
-		cDark,
+		listBg,
 		tcell.StyleDefault.Foreground(cWhite),
 		tcell.StyleDefault.Foreground(cBlack).Background(cCyan).Attributes(tcell.AttrBold),
 	)
+	// Show company name in blue below the symbol field on any text change
+	a.symField.SetChangedFunc(func(text string) {
+		sym := strings.ToUpper(strings.TrimSpace(text))
+		name := getCompanyName(sym)
+		if name != "" {
+			a.companyTV.SetText("  [#00BFFF]" + name + "[-]")
+		} else {
+			a.companyTV.SetText("")
+		}
+	})
+
+	// Up/down on dropdowns navigate to prev/next field.
+	// Per-DropDown (not form-level) so InputField Up/Down still reach the
+	// autocomplete list when it is visible.
+	navDD := func(dd *tview.DropDown) {
+		dd.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+			switch event.Key() {
+			case tcell.KeyDown:
+				return tcell.NewEventKey(tcell.KeyTab, 0, tcell.ModNone)
+			case tcell.KeyUp:
+				return tcell.NewEventKey(tcell.KeyBacktab, 0, tcell.ModNone)
+			}
+			return event
+		})
+	}
+	navDD(a.actionDD)
+	navDD(a.typeDD)
 }
 
 // ── Keys ──────────────────────────────────────────────────────────────────────
@@ -353,11 +394,42 @@ func (a *termApp) globalKeys(event *tcell.EventKey) *tcell.EventKey {
 		return event
 	}
 
+	// Fix 5: left/right arrows switch tabs (but not when cursor is in a text field)
+	if event.Key() == tcell.KeyLeft || event.Key() == tcell.KeyRight {
+		if _, isInput := a.tapp.GetFocus().(*tview.InputField); !isInput {
+			if event.Key() == tcell.KeyLeft {
+				t := a.activeTab - 1
+				if t < 0 {
+					t = 3
+				}
+				a.switchTab(t)
+			} else {
+				t := a.activeTab + 1
+				if t > 3 {
+					t = 0
+				}
+				a.switchTab(t)
+			}
+			return nil
+		}
+	}
+
 	switch a.tapp.GetFocus().(type) {
 	case *tview.InputField:
 		if event.Key() == tcell.KeyEscape {
-			a.tapp.SetFocus(a.form)
+			a.tapp.SetFocus(a.actionDD)
 			return nil
+		}
+		// Down/Up navigate to next/prev field — UNLESS the autocomplete list in
+		// symField is currently open (in that case arrows must scroll the list).
+		symListOpen := a.tapp.GetFocus() == a.symField && a.autocompleteOpen
+		if !symListOpen {
+			switch event.Key() {
+			case tcell.KeyDown:
+				return tcell.NewEventKey(tcell.KeyTab, 0, tcell.ModNone)
+			case tcell.KeyUp:
+				return tcell.NewEventKey(tcell.KeyBacktab, 0, tcell.ModNone)
+			}
 		}
 		return event
 	case *tview.DropDown:
@@ -407,7 +479,7 @@ func (a *termApp) switchTab(tab int) {
 		a.tapp.SetFocus(a.posTable)
 	case tabTrade:
 		a.pages.SwitchToPage("trade")
-		a.tapp.SetFocus(a.form)
+		a.tapp.SetFocus(a.actionDD) // land on the first logical field, not the ticker
 	case tabOrders:
 		a.pages.SwitchToPage("orders")
 		a.tapp.SetFocus(a.ordersTable)
