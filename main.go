@@ -37,6 +37,8 @@ const (
 	tabTrade     = 1
 	tabOrders    = 2
 	tabActivity  = 3
+	tabChart     = 4
+	tabCount     = 5
 )
 
 // ── App ───────────────────────────────────────────────────────────────────────
@@ -60,11 +62,28 @@ type termApp struct {
 	actionDD   *tview.DropDown
 	typeDD     *tview.DropDown
 
+	// Chart tab
+	chartPage      *tview.Flex
+	chartSymField  *tview.InputField
+	chartCompanyTV *tview.TextView
+	chartRangeTV   *tview.TextView
+	chartTFTV      *tview.TextView
+	chartStatsTV   *tview.TextView
+	chartCanvasV   *chartCanvas
+	chartRangeIdx  int
+	chartTFIdx     int
+	chartAutoOpen  bool
+
 	activeTab        int
 	account          Account
 	confirmActive    bool
 	autocompleteOpen bool // true while symField autocomplete list is visible
 	stopCh           chan struct{}
+
+	// Hit-test ranges for clickable text bars: each entry is [startCol, endCol).
+	tabHitRanges        [][2]int
+	chartRangeHitRanges [][2]int
+	chartTFHitRanges    [][2]int
 }
 
 func newTermApp() *termApp {
@@ -86,6 +105,7 @@ func newTermApp() *termApp {
 		tapp:      tview.NewApplication(),
 		activeTab: tabPositions,
 	}
+	a.tapp.EnableMouse(true)
 	a.build()
 	return a
 }
@@ -107,6 +127,7 @@ func (a *termApp) build() {
 	a.buildOrdersTable()
 	a.buildActivityTable()
 	a.buildTradeForm()
+	a.buildChartTab()
 	a.resultTV = tview.NewTextView().SetDynamicColors(true)
 	a.resultTV.SetBackgroundColor(cBlack)
 
@@ -119,7 +140,8 @@ func (a *termApp) build() {
 		AddPage("positions", a.posTable, true, true).
 		AddPage("trade", tradePage, true, false).
 		AddPage("orders", a.ordersTable, true, false).
-		AddPage("activity", a.activityTable, true, false)
+		AddPage("activity", a.activityTable, true, false).
+		AddPage("chart", a.chartPage, true, false)
 
 	a.statusBar = tview.NewTextView().SetDynamicColors(true)
 	a.statusBar.SetBackgroundColor(cDark)
@@ -153,25 +175,64 @@ func (a *termApp) makeTabBar() *tview.TextView {
 	tv := tview.NewTextView().SetDynamicColors(true)
 	tv.SetBackgroundColor(cBlack)
 	a.updateTabBar(tv)
+	// Click-to-switch: each tab label occupies a known visible column range,
+	// recorded by updateTabBar in tabHitRanges.
+	// NOTE: tview's Box.WrapMouseHandler invokes our capture BEFORE the inner
+	// MouseHandler's InRect check, and it's called for any event Flex bubbles
+	// through this primitive — so we must InRect-check ourselves, otherwise
+	// clicks elsewhere on screen would match column ranges here.
+	// Consuming requires returning tview.MouseConsumed (returning the original
+	// action keeps consumed=false and the click bubbles to siblings).
+	tv.SetMouseCapture(func(action tview.MouseAction, event *tcell.EventMouse) (tview.MouseAction, *tcell.EventMouse) {
+		if action != tview.MouseLeftClick || event == nil {
+			return action, event
+		}
+		mx, my := event.Position()
+		if !tv.InRect(mx, my) {
+			return action, event
+		}
+		bx, _, _, _ := tv.GetInnerRect()
+		col := mx - bx
+		for i, rng := range a.tabHitRanges {
+			if col >= rng[0] && col < rng[1] {
+				a.switchTab(i)
+				return tview.MouseConsumed, nil
+			}
+		}
+		return action, event
+	})
 	return tv
 }
 
 func (a *termApp) updateTabBar(tv *tview.TextView) {
-	pos := "[#888888]  [1] POSITIONS  [-]"
-	trade := "[#888888]  [2] TRADE  [-]"
-	orders := "[#888888]  [3] ORDERS  [-]"
-	activity := "[#888888]  [4] ACTIVITY  [-]"
-	switch a.activeTab {
-	case tabPositions:
-		pos = "[#000000:#FF6600:b]  [1] POSITIONS  [-:-:-]"
-	case tabTrade:
-		trade = "[#000000:#FF6600:b]  [2] TRADE  [-:-:-]"
-	case tabOrders:
-		orders = "[#000000:#FF6600:b]  [3] ORDERS  [-:-:-]"
-	case tabActivity:
-		activity = "[#000000:#FF6600:b]  [4] ACTIVITY  [-:-:-]"
+	// Visible labels (color tags don't affect the rendered column width).
+	labels := []string{
+		"  [1] POSITIONS  ",
+		"  [2] TRADE  ",
+		"  [3] ORDERS  ",
+		"  [4] ACTIVITY  ",
+		"  [5] CHART  ",
 	}
-	tv.SetText(pos + " " + trade + " " + orders + " " + activity)
+	const sep = " "
+
+	a.tabHitRanges = make([][2]int, len(labels))
+	col := 0
+	for i, lbl := range labels {
+		a.tabHitRanges[i] = [2]int{col, col + len(lbl)}
+		col += len(lbl) + len(sep)
+	}
+
+	color := func(i int, lbl string) string {
+		if i == a.activeTab {
+			return "[#000000:#FF6600:b]" + lbl + "[-:-:-]"
+		}
+		return "[#888888]" + lbl + "[-]"
+	}
+	parts := make([]string, len(labels))
+	for i, lbl := range labels {
+		parts[i] = color(i, lbl)
+	}
+	tv.SetText(strings.Join(parts, sep))
 }
 
 func (a *termApp) buildPositionsTable() {
@@ -201,6 +262,34 @@ func (a *termApp) buildPositionsTable() {
 	a.posTable.SetCell(1, 0,
 		tview.NewTableCell("  LOADING...").SetTextColor(cGray2).SetSelectable(false),
 	)
+
+	// Double-click a position row to pre-fill the trade form with a SELL of
+	// that symbol+qty, then jump to the TRADE tab.
+	a.posTable.SetMouseCapture(func(action tview.MouseAction, event *tcell.EventMouse) (tview.MouseAction, *tcell.EventMouse) {
+		if action != tview.MouseLeftDoubleClick || event == nil {
+			return action, event
+		}
+		x, y := event.Position()
+		if !a.posTable.InRect(x, y) {
+			return action, event
+		}
+		row, _ := a.posTable.CellAt(x, y)
+		if row < 1 {
+			return action, event
+		}
+		symbol := strings.TrimSpace(a.posTable.GetCell(row, 0).Text)
+		qty := strings.TrimSpace(a.posTable.GetCell(row, 1).Text)
+		if symbol == "" {
+			return action, event
+		}
+		a.actionDD.SetCurrentOption(1) // SELL
+		a.typeDD.SetCurrentOption(0)   // MARKET
+		a.symField.SetText(symbol)
+		a.qtyField.SetText(qty)
+		a.priceField.SetText("")
+		a.switchTab(tabTrade)
+		return tview.MouseConsumed, nil
+	})
 }
 
 func (a *termApp) buildOrdersTable() {
@@ -248,6 +337,33 @@ func (a *termApp) buildOrdersTable() {
 			return nil
 		}
 		return event
+	})
+
+	// Right-click also triggers the cancel modal for the row under the cursor.
+	a.ordersTable.SetMouseCapture(func(action tview.MouseAction, event *tcell.EventMouse) (tview.MouseAction, *tcell.EventMouse) {
+		if action != tview.MouseRightClick || event == nil {
+			return action, event
+		}
+		x, y := event.Position()
+		if !a.ordersTable.InRect(x, y) {
+			return action, event
+		}
+		row, _ := a.ordersTable.CellAt(x, y)
+		if row < 1 {
+			return action, event
+		}
+		ref := a.ordersTable.GetCell(row, 0).GetReference()
+		if ref == nil {
+			return action, event
+		}
+		orderID, ok := ref.(string)
+		if !ok {
+			return action, event
+		}
+		symbol := strings.TrimSpace(a.ordersTable.GetCell(row, 1).Text)
+		a.ordersTable.Select(row, 0)
+		a.showCancelModal(orderID, symbol)
+		return tview.MouseConsumed, nil
 	})
 }
 
@@ -400,12 +516,12 @@ func (a *termApp) globalKeys(event *tcell.EventKey) *tcell.EventKey {
 			if event.Key() == tcell.KeyLeft {
 				t := a.activeTab - 1
 				if t < 0 {
-					t = 3
+					t = tabCount - 1
 				}
 				a.switchTab(t)
 			} else {
 				t := a.activeTab + 1
-				if t > 3 {
+				if t >= tabCount {
 					t = 0
 				}
 				a.switchTab(t)
@@ -416,13 +532,24 @@ func (a *termApp) globalKeys(event *tcell.EventKey) *tcell.EventKey {
 
 	switch a.tapp.GetFocus().(type) {
 	case *tview.InputField:
+		focus := a.tapp.GetFocus()
+		// Chart tab's symbol input: Escape moves focus to the chart canvas
+		// (where range hotkeys are intercepted); Down/Up are left alone so the
+		// autocomplete list can scroll.
+		if focus == a.chartSymField {
+			if event.Key() == tcell.KeyEscape {
+				a.tapp.SetFocus(a.chartCanvasV)
+				return nil
+			}
+			return event
+		}
 		if event.Key() == tcell.KeyEscape {
 			a.tapp.SetFocus(a.actionDD)
 			return nil
 		}
 		// Down/Up navigate to next/prev field — UNLESS the autocomplete list in
 		// symField is currently open (in that case arrows must scroll the list).
-		symListOpen := a.tapp.GetFocus() == a.symField && a.autocompleteOpen
+		symListOpen := focus == a.symField && a.autocompleteOpen
 		if !symListOpen {
 			switch event.Key() {
 			case tcell.KeyDown:
@@ -458,6 +585,9 @@ func (a *termApp) globalKeys(event *tcell.EventKey) *tcell.EventKey {
 	case '4':
 		a.switchTab(tabActivity)
 		return nil
+	case '5':
+		a.switchTab(tabChart)
+		return nil
 	case 'r', 'R':
 		go a.refresh()
 		return nil
@@ -486,6 +616,9 @@ func (a *termApp) switchTab(tab int) {
 	case tabActivity:
 		a.pages.SwitchToPage("activity")
 		a.tapp.SetFocus(a.activityTable)
+	case tabChart:
+		a.pages.SwitchToPage("chart")
+		a.tapp.SetFocus(a.chartSymField)
 	}
 }
 
@@ -896,9 +1029,14 @@ func (a *termApp) loadActivities(activities []Activity, closedOrders []Order, ac
 }
 
 func (a *termApp) refreshStatus() {
-	hint := "[#555555][Q]UIT  [R]/F5 REFRESH  [1][2][3][4] TABS[-]"
-	if a.activeTab == tabOrders {
-		hint = "[#555555][Q]UIT  [R]/F5 REFRESH  [1][2][3][4] TABS  [X]/DEL CANCEL ORDER[-]"
+	hint := "[#555555][Q]UIT  [R]/F5 REFRESH  [1][2][3][4][5] TABS · MOUSE OK[-]"
+	switch a.activeTab {
+	case tabOrders:
+		hint = "[#555555][Q]UIT  [R]/F5 REFRESH  [X]/DEL OR RIGHT-CLICK TO CANCEL ORDER[-]"
+	case tabPositions:
+		hint = "[#555555][Q]UIT  [R]/F5 REFRESH  DOUBLE-CLICK POSITION → SELL[-]"
+	case tabChart:
+		hint = "[#555555][Q]UIT  [R]/F5 REFRESH  RANGE [D][W][M][T]YD [Y][F]IVE MA[X]  ·  CLICK CANDLE ROW FOR INTERVAL[-]"
 	}
 	a.statusBar.SetText(fmt.Sprintf(
 		"  [#FF6600]PORTFOLIO[-] [white]%s[-]   [#FF6600]CASH[-] [white]%s[-]   [#FF6600]BUYING POWER[-] [white]%s[-]    %s",

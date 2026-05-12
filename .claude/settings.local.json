@@ -5,7 +5,14 @@
       "Bash(go build *)",
       "Bash(mkdir -p \"c:\\\\Users\\\\Aditya\\\\adi-js\\\\Alpaca\\\\tcell-app\\\\bin\")",
       "Bash(cp .env bin/.env)",
-      "Bash(go mod *)"
+      "Bash(go mod *)",
+      "Bash(go vet *)",
+      "Bash(find ~/go/pkg/mod/github.com/rivo -name \"table.go\" 2>/dev/null | head -3)",
+      "Read(//Users/adityamishra/go/pkg/mod/github.com/rivo/**)",
+      "Bash(ls \"/Users/adityamishra/personal-important/Codeing stuff/adi-js/alpaca/Alpaca_trading_terminal/\"*_test.go 2>/dev/null; echo \"---\"; ls ~/.config/alpaca-tui/ 2>/dev/null || ls \"$HOME/Library/Application Support/alpaca-tui/\" 2>/dev/null)",
+      "Read(//Users/adityamishra/.config/**)",
+      "Bash(go test *)",
+      "Bash(ALPACA_TUI_TRACE=1 go test -run TestChartTFClickDoesNotSwitchTabs -timeout 30s -v)"
     ],
     "additionalDirectories": [
       "c:\\Users\\Aditya\\adi-js\\Alpaca\\tcell-app"
