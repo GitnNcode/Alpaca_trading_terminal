@@ -76,6 +76,16 @@ type chartCanvas struct {
 	dateFmt    string
 	err        string
 	loading    bool
+
+	// scrollOffset is how many bars to skip from the right (newest) end.
+	// 0 = the newest bar is the rightmost candle. Increased to view older data.
+	scrollOffset int
+
+	// visibleStart and visibleEnd are recomputed on each Draw() so input
+	// handlers know the current window without re-running the layout math.
+	visibleStart int
+	visibleEnd   int
+	visibleStep  int // step (in bars) to scroll by per ,/. press, set in Draw
 }
 
 func newChartCanvas() *chartCanvas {
@@ -109,9 +119,9 @@ func (c *chartCanvas) Draw(screen tcell.Screen) {
 		return
 	}
 
-	// Reserve right axis (price labels) and bottom axis (date labels)
+	// Reserve right axis (price labels) and bottom axis (date + scroll bar).
 	const rightAxisW = 10
-	const bottomAxisH = 1
+	const bottomAxisH = 2 // row N-2 = scrollbar, row N-1 = date labels
 	chartW := w - rightAxisW - 1
 	chartH := h - bottomAxisH - 1
 	chartX := x + 1
@@ -120,15 +130,55 @@ func (c *chartCanvas) Draw(screen tcell.Screen) {
 		return
 	}
 
-	// Aggregate bars to fit the chart width if we have more candles than columns
-	bars := reduceBars(c.bars, chartW)
-	n := len(bars)
-	if n == 0 {
-		return
+	n := len(c.bars)
+
+	// TradingView-style candle sizing.
+	//   slotW = bodyW + gap. We always keep a 1-column gap between candles so
+	//   they never visually merge into a solid wall.
+	//
+	//   sparse (room to spare)  → bodyW 3, gap 1 (3-wide body, wick centered)
+	//   medium                  → bodyW 1, gap 1 (1-wide body+wick)
+	//   dense                   → bodyW 1, gap 1 with scrolling enabled
+	var slotW, bodyW int
+	switch {
+	case n*4 <= chartW:
+		slotW, bodyW = 4, 3
+	default:
+		slotW, bodyW = 2, 1
 	}
 
+	visibleCount := chartW / slotW
+	if visibleCount > n {
+		visibleCount = n
+	}
+
+	// Clamp scroll offset and resolve the window of bars to render.
+	maxOffset := n - visibleCount
+	if maxOffset < 0 {
+		maxOffset = 0
+	}
+	if c.scrollOffset > maxOffset {
+		c.scrollOffset = maxOffset
+	}
+	if c.scrollOffset < 0 {
+		c.scrollOffset = 0
+	}
+	endIdx := n - c.scrollOffset
+	startIdx := endIdx - visibleCount
+	if startIdx < 0 {
+		startIdx = 0
+	}
+	visible := c.bars[startIdx:endIdx]
+	c.visibleStart = startIdx
+	c.visibleEnd = endIdx
+	c.visibleStep = visibleCount / 8
+	if c.visibleStep < 1 {
+		c.visibleStep = 1
+	}
+
+	// Min/max over the visible window so the y-axis zooms with the scroll.
 	minP, maxP := math.Inf(1), math.Inf(-1)
-	for _, b := range bars {
+	for _, b := range visible {
 		if b.Low < minP {
 			minP = b.Low
 		}
@@ -139,7 +189,6 @@ func (c *chartCanvas) Draw(screen tcell.Screen) {
 	if maxP <= minP {
 		maxP = minP + 1
 	}
-	// Pad min/max by 2% so candles don't kiss the edges
 	pad := (maxP - minP) * 0.02
 	minP -= pad
 	maxP += pad
@@ -155,7 +204,7 @@ func (c *chartCanvas) Draw(screen tcell.Screen) {
 		return r
 	}
 
-	// Faint horizontal grid lines at 4 equally-spaced rows
+	// Faint horizontal grid lines at 5 evenly-spaced rows
 	gridStyle := tcell.StyleDefault.Foreground(cGray).Background(cBlack)
 	for i := 0; i < 5; i++ {
 		gr := chartY + i*(chartH-1)/4
@@ -164,12 +213,14 @@ func (c *chartCanvas) Draw(screen tcell.Screen) {
 		}
 	}
 
-	// Candles — one column per bar
-	for i, b := range bars {
-		col := chartX + i*chartW/n
-		if col >= chartX+chartW {
-			col = chartX + chartW - 1
+	// Candles — TradingView-style: wide body, thin wick centered through it,
+	// always a 1-column gap between slots so candles can't visually merge.
+	for i, b := range visible {
+		slotX := chartX + i*slotW
+		if slotX+bodyW > chartX+chartW {
+			break
 		}
+		wickCol := slotX + bodyW/2 // center of the body
 		color := cGreen
 		if b.Close < b.Open {
 			color = cRed
@@ -181,21 +232,24 @@ func (c *chartCanvas) Draw(screen tcell.Screen) {
 		opR := chartY + priceToRow(b.Open)
 		clR := chartY + priceToRow(b.Close)
 
-		// Wick
+		// Wick: single column running from high to low, through the body.
 		for r := hiR; r <= loR; r++ {
-			screen.SetContent(col, r, '│', nil, st)
+			screen.SetContent(wickCol, r, '│', nil, st)
 		}
-		// Body (open→close)
+		// Body: rectangle bodyW wide, open→close vertically. Body chars overwrite
+		// the wick in the open→close region, leaving a true wick only above/below.
 		bTop, bBot := opR, clR
 		if bTop > bBot {
 			bTop, bBot = bBot, bTop
 		}
-		for r := bTop; r <= bBot; r++ {
-			screen.SetContent(col, r, '█', nil, st)
+		for bcx := slotX; bcx < slotX+bodyW; bcx++ {
+			for r := bTop; r <= bBot; r++ {
+				screen.SetContent(bcx, r, '█', nil, st)
+			}
 		}
 	}
 
-	// Right-side price axis (5 labels evenly spaced)
+	// Right-side price axis
 	axisX := chartX + chartW
 	for i := 0; i < 5; i++ {
 		p := maxP - (maxP-minP)*float64(i)/4.0
@@ -203,61 +257,58 @@ func (c *chartCanvas) Draw(screen tcell.Screen) {
 		drawString(screen, axisX+1, row, fmt.Sprintf("%-*.2f", rightAxisW-1, p), cGray2)
 	}
 
-	// Bottom-row date labels (~5 of them)
-	dateRow := chartY + chartH
+	// Scroll-position bar (row chartY+chartH). A faint track with a bright
+	// segment showing which bars are visible relative to the whole dataset.
+	scrollRow := chartY + chartH
+	if n > 0 {
+		trackStyle := tcell.StyleDefault.Foreground(cGray).Background(cBlack)
+		thumbStyle := tcell.StyleDefault.Foreground(cOrange).Background(cBlack).Attributes(tcell.AttrBold)
+		for cx := chartX; cx < chartX+chartW; cx++ {
+			screen.SetContent(cx, scrollRow, '─', nil, trackStyle)
+		}
+		thumbStart := chartX + startIdx*chartW/n
+		thumbEnd := chartX + endIdx*chartW/n
+		if thumbEnd <= thumbStart {
+			thumbEnd = thumbStart + 1
+		}
+		if thumbEnd > chartX+chartW {
+			thumbEnd = chartX + chartW
+		}
+		for cx := thumbStart; cx < thumbEnd; cx++ {
+			screen.SetContent(cx, scrollRow, '━', nil, thumbStyle)
+		}
+		// Right-side label: visible range / total
+		info := fmt.Sprintf("%d-%d/%d", startIdx+1, endIdx, n)
+		drawString(screen, axisX+1, scrollRow, info, cGray2)
+	}
+
+	// Bottom-row date labels (~5 of them) for the visible window
+	dateRow := chartY + chartH + 1
 	labels := 5
 	if chartW < 60 {
 		labels = 3
 	}
-	for i := 0; i < labels; i++ {
-		idx := i * (n - 1) / (labels - 1)
-		col := chartX + idx*chartW/n
-		s := bars[idx].Time.Local().Format(c.dateFmt)
-		// Center label under its column, clipped to chart bounds
-		start := col - len(s)/2
-		if start < chartX {
-			start = chartX
-		}
-		if start+len(s) > chartX+chartW {
-			start = chartX + chartW - len(s)
-		}
-		drawString(screen, start, dateRow, s, cGray2)
-	}
-}
-
-// reduceBars aggregates len(bars) bars into at most n output candles using
-// OHLC aggregation: open of first, close of last, high=max, low=min.
-func reduceBars(bars []Bar, n int) []Bar {
-	if n <= 0 || len(bars) <= n {
-		return bars
-	}
-	out := make([]Bar, 0, n)
-	step := float64(len(bars)) / float64(n)
-	for i := 0; i < n; i++ {
-		s := int(float64(i) * step)
-		e := int(float64(i+1) * step)
-		if e > len(bars) {
-			e = len(bars)
-		}
-		if s >= e {
-			continue
-		}
-		agg := bars[s]
-		agg.Close = bars[e-1].Close
-		var vol int64
-		for j := s; j < e; j++ {
-			if bars[j].High > agg.High {
-				agg.High = bars[j].High
+	vn := len(visible)
+	if vn > 0 {
+		for i := 0; i < labels; i++ {
+			var idx int
+			if labels == 1 {
+				idx = 0
+			} else {
+				idx = i * (vn - 1) / (labels - 1)
 			}
-			if bars[j].Low < agg.Low {
-				agg.Low = bars[j].Low
+			col := chartX + idx*slotW + bodyW/2
+			s := visible[idx].Time.Local().Format(c.dateFmt)
+			start := col - len(s)/2
+			if start < chartX {
+				start = chartX
 			}
-			vol += bars[j].Volume
+			if start+len(s) > chartX+chartW {
+				start = chartX + chartW - len(s)
+			}
+			drawString(screen, start, dateRow, s, cGray2)
 		}
-		agg.Volume = vol
-		out = append(out, agg)
 	}
-	return out
 }
 
 func drawString(screen tcell.Screen, x, y int, s string, fg tcell.Color) {
@@ -387,25 +438,45 @@ func (a *termApp) buildChartTab() {
 		}
 	})
 
-	// Range hotkeys on the canvas — d/w/m/t/y/f/x cycle through chartRanges,
-	// and [ / ] step prev/next. Letters are intercepted only when the canvas
-	// (not the symbol input) has focus, so typing in the symbol field is unaffected.
+	// Range + scroll hotkeys on the canvas. Letters are intercepted only when
+	// the canvas (not the symbol input) has focus, so typing in the symbol
+	// field is unaffected.
 	a.chartCanvasV.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		switch event.Key() {
-		case tcell.KeyEnter:
+		case tcell.KeyEnter, tcell.KeyTab, tcell.KeyBacktab:
 			a.tapp.SetFocus(a.chartSymField)
 			return nil
-		case tcell.KeyTab, tcell.KeyBacktab:
-			a.tapp.SetFocus(a.chartSymField)
+		case tcell.KeyHome:
+			a.chartScrollTo(len(a.chartCanvasV.bars)) // far back; Draw clamps
+			return nil
+		case tcell.KeyEnd:
+			a.chartScrollTo(0)
+			return nil
+		case tcell.KeyLeft:
+			a.chartScrollBy(+a.chartCanvasV.visibleStep)
+			return nil
+		case tcell.KeyRight:
+			a.chartScrollBy(-a.chartCanvasV.visibleStep)
 			return nil
 		}
 		r := event.Rune()
-		// prev/next
-		if r == '[' {
+		switch r {
+		case ',':
+			a.chartScrollBy(+a.chartCanvasV.visibleStep)
+			return nil
+		case '.':
+			a.chartScrollBy(-a.chartCanvasV.visibleStep)
+			return nil
+		case '<':
+			a.chartScrollBy(+a.chartCanvasV.visibleStep * 8) // page-sized jump
+			return nil
+		case '>':
+			a.chartScrollBy(-a.chartCanvasV.visibleStep * 8)
+			return nil
+		case '[':
 			a.cycleChartRange(-1)
 			return nil
-		}
-		if r == ']' {
+		case ']':
 			a.cycleChartRange(+1)
 			return nil
 		}
@@ -420,6 +491,26 @@ func (a *termApp) buildChartTab() {
 			}
 		}
 		return event
+	})
+
+	// Mouse wheel on the canvas scrolls through history.
+	a.chartCanvasV.SetMouseCapture(func(action tview.MouseAction, event *tcell.EventMouse) (tview.MouseAction, *tcell.EventMouse) {
+		if event == nil {
+			return action, event
+		}
+		mx, my := event.Position()
+		if !a.chartCanvasV.InRect(mx, my) {
+			return action, event
+		}
+		switch action {
+		case tview.MouseScrollUp:
+			a.chartScrollBy(+a.chartCanvasV.visibleStep)
+			return tview.MouseConsumed, nil
+		case tview.MouseScrollDown:
+			a.chartScrollBy(-a.chartCanvasV.visibleStep)
+			return tview.MouseConsumed, nil
+		}
+		return action, event
 	})
 
 	symRow := tview.NewFlex().
@@ -508,6 +599,24 @@ func (a *termApp) cycleChartRange(delta int) {
 	a.selectChartRange(idx)
 }
 
+// chartScrollBy moves the visible window by delta bars (positive = older,
+// negative = newer). Clamping happens in chartCanvas.Draw so this can safely
+// pass overshooting values like math.MaxInt.
+func (a *termApp) chartScrollBy(delta int) {
+	a.chartCanvasV.scrollOffset += delta
+	if a.chartCanvasV.scrollOffset < 0 {
+		a.chartCanvasV.scrollOffset = 0
+	}
+}
+
+// chartScrollTo sets an absolute scroll offset (clamped on next Draw).
+func (a *termApp) chartScrollTo(offset int) {
+	if offset < 0 {
+		offset = 0
+	}
+	a.chartCanvasV.scrollOffset = offset
+}
+
 // loadChart fetches bars for the selected symbol and range, then redraws.
 func (a *termApp) loadChart(symbol string, rangeIdx int) {
 	if rangeIdx < 0 || rangeIdx >= len(chartRanges) {
@@ -526,6 +635,7 @@ func (a *termApp) loadChart(symbol string, rangeIdx int) {
 		a.chartCanvasV.symbol = symbol
 		a.chartCanvasV.rangeLabel = rg.label
 		a.chartCanvasV.dateFmt = rg.dateFmt
+		a.chartCanvasV.scrollOffset = 0 // start at the most recent bar
 		a.chartCanvasV.SetTitle(fmt.Sprintf(" [#FF6600::b]CHART  %s  ·  %s  ·  %s[-] ", symbol, rg.label, tf.label))
 		a.chartStatsTV.SetText("")
 	})

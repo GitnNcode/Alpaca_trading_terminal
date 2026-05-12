@@ -1029,14 +1029,17 @@ func (a *termApp) loadActivities(activities []Activity, closedOrders []Order, ac
 }
 
 func (a *termApp) refreshStatus() {
-	hint := "[#555555][Q]UIT  [R]/F5 REFRESH  [1][2][3][4][5] TABS · MOUSE OK[-]"
+	// NOTE on bracket syntax: tview parses [X] as a color tag and strips it
+	// silently if X isn't a valid color (so "[Q]UIT" rendered as just "UIT").
+	// The documented escape is [X[]  →  rendered as [X].
+	hint := "[#555555][Q[]UIT  [R[]/F5 REFRESH  [1[][2[][3[][4[][5[] TABS · MOUSE OK[-]"
 	switch a.activeTab {
 	case tabOrders:
-		hint = "[#555555][Q]UIT  [R]/F5 REFRESH  [X]/DEL OR RIGHT-CLICK TO CANCEL ORDER[-]"
+		hint = "[#555555][Q[]UIT  [R[]/F5 REFRESH  [X[]/DEL OR RIGHT-CLICK TO CANCEL ORDER[-]"
 	case tabPositions:
-		hint = "[#555555][Q]UIT  [R]/F5 REFRESH  DOUBLE-CLICK POSITION → SELL[-]"
+		hint = "[#555555][Q[]UIT  [R[]/F5 REFRESH  DOUBLE-CLICK POSITION → SELL[-]"
 	case tabChart:
-		hint = "[#555555][Q]UIT  [R]/F5 REFRESH  RANGE [D][W][M][T]YD [Y][F]IVE MA[X]  ·  CLICK CANDLE ROW FOR INTERVAL[-]"
+		hint = "[#555555][Q[]UIT  [R[]/F5 REFRESH  RANGE [D[][W[][M[][T[]YD [Y[][F[]IVE MA[X[]  ·  CLICK CANDLE ROW  ·  ←/→ , . SCROLL · HOME/END[-]"
 	}
 	a.statusBar.SetText(fmt.Sprintf(
 		"  [#FF6600]PORTFOLIO[-] [white]%s[-]   [#FF6600]CASH[-] [white]%s[-]   [#FF6600]BUYING POWER[-] [white]%s[-]    %s",

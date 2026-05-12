@@ -190,3 +190,112 @@ func TestChartTFClickDoesNotSwitchTabs(t *testing.T) {
 		t.Fatal("state read timed out")
 	}
 }
+
+// drawCanvasOnce renders the canvas once against an in-memory screen so we can
+// inspect the visibleStart/visibleEnd/visibleStep fields that Draw computes.
+func drawCanvasOnce(t *testing.T, c *chartCanvas, w, h int) {
+	t.Helper()
+	screen := tcell.NewSimulationScreen("UTF-8")
+	if err := screen.Init(); err != nil {
+		t.Fatalf("init sim screen: %v", err)
+	}
+	defer screen.Fini()
+	screen.SetSize(w, h)
+	c.SetRect(0, 0, w, h)
+	c.Draw(screen)
+}
+
+func makeBars(n int) []Bar {
+	bars := make([]Bar, n)
+	base := time.Date(2024, 1, 1, 9, 30, 0, 0, time.UTC)
+	for i := 0; i < n; i++ {
+		bars[i] = Bar{
+			Time:  base.Add(time.Duration(i) * time.Minute),
+			Open:  100 + float64(i%5),
+			High:  102 + float64(i%5),
+			Low:   99 + float64(i%5),
+			Close: 101 + float64(i%5),
+		}
+	}
+	return bars
+}
+
+// TestChartWindowedScroll verifies that when there are more bars than chart
+// columns, Draw produces a windowed view (no aggregation overlap), defaults
+// to showing the newest bars, and scrolls back into history on demand.
+func TestChartWindowedScroll(t *testing.T) {
+	c := newChartCanvas()
+	c.bars = makeBars(500) // 500 bars
+	c.dateFmt = "01/02"
+
+	// Render with an 80x20 inner-rect-equivalent screen.
+	const w, h = 80, 20
+	drawCanvasOnce(t, c, w, h)
+
+	// 500 > chartW (~69 after reserving the axis). visibleStart should be near
+	// the end of the dataset (offset 0 = newest).
+	if c.visibleEnd != 500 {
+		t.Fatalf("default visibleEnd = %d, want 500 (newest bar)", c.visibleEnd)
+	}
+	if c.visibleStart <= 0 || c.visibleStart >= 500 {
+		t.Fatalf("default visibleStart = %d, expected between 1 and 499", c.visibleStart)
+	}
+	firstWindow := c.visibleEnd - c.visibleStart
+	if firstWindow <= 0 || firstWindow > w {
+		t.Fatalf("first window size = %d, expected (0, %d]", firstWindow, w)
+	}
+
+	// Scroll back 50 bars; the window should slide left by 50.
+	prevEnd := c.visibleEnd
+	c.scrollOffset += 50
+	drawCanvasOnce(t, c, w, h)
+	if c.visibleEnd != prevEnd-50 {
+		t.Fatalf("after scrollBy +50: visibleEnd = %d, want %d", c.visibleEnd, prevEnd-50)
+	}
+
+	// Overshoot scroll: should clamp at the oldest data.
+	c.scrollOffset = 10000
+	drawCanvasOnce(t, c, w, h)
+	if c.visibleStart != 0 {
+		t.Fatalf("after huge overshoot: visibleStart = %d, want 0", c.visibleStart)
+	}
+}
+
+// TestChartCandleSpacing verifies that:
+//   - With room to spare (bars*4 fits), wide bodies (slotW=4) are used and
+//     every bar is visible.
+//   - In the medium range, narrow bodies with a 1-col gap (slotW=2) fit all
+//     bars without scrolling.
+//   - When bars exceed chartW/2, the chart goes into scroll mode (subset
+//     visible). The user always has a gap between candles — never the
+//     no-gap "wall of color" they reported.
+func TestChartCandleSpacing(t *testing.T) {
+	const w, h = 80, 20
+	// Canvas has a border, so InnerRect is 78x18.
+	// chartW = innerW - rightAxis(10) - 1 = 67.
+	cases := []struct {
+		bars         int
+		expectAllFit bool
+	}{
+		{bars: 10, expectAllFit: true},   // 10*4=40 <= 67 → wide body, all fit
+		{bars: 16, expectAllFit: true},   // 16*4=64 <= 67 → wide body, all fit
+		{bars: 25, expectAllFit: true},   // 25*2=50 <= 67 → narrow body+gap, all fit
+		{bars: 33, expectAllFit: true},   // 33*2=66 <= 67 → fits at edge
+		{bars: 34, expectAllFit: false},  // 34*2=68 > 67 → scroll mode
+		{bars: 60, expectAllFit: false},  // scroll
+		{bars: 500, expectAllFit: false}, // packed; scroll on
+	}
+
+	for _, tc := range cases {
+		c := newChartCanvas()
+		c.bars = makeBars(tc.bars)
+		c.dateFmt = "01/02"
+		drawCanvasOnce(t, c, w, h)
+
+		fits := (c.visibleEnd - c.visibleStart) == tc.bars
+		if fits != tc.expectAllFit {
+			t.Errorf("bars=%d: fits=%v want %v (visible %d..%d)",
+				tc.bars, fits, tc.expectAllFit, c.visibleStart, c.visibleEnd)
+		}
+	}
+}
