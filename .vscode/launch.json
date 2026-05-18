@@ -1,0 +1,14 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Alpaca TUI",
+      "type": "go",
+      "request": "launch",
+      "mode": "auto",
+      "program": "${workspaceFolder}",
+      "console": "externalTerminal",
+      "cwd": "${workspaceFolder}"
+    }
+  ]
+}
