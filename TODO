@@ -1,2 +1,134 @@
-1- indicators
-2- use go routines(muktithreading) for refreshing
+# TODO
+
+In-progress:
+- [ ] indicators (main-trading-terminal-go — MACD / RSI / Bollinger / Stochastic queued behind EMA)
+
+---
+
+## main-trading-terminal-go (canonical)
+
+### Bugs / polish
+- [ ] api.go:148 — orders query hardcoded `limit=50`; add pagination for accounts with >50 open orders
+- [ ] main.go:580 — Esc in chart symbol input returns to symbol field instead of closing modal (unintuitive)
+- [ ] No persistent error log — red overlays disappear; add a scrollback panel or log file
+
+### UI changes
+- [ ] Dark / light / custom theme toggle (palette currently baked at main.go:19-32)
+- [ ] In-app `?` help overlay listing all keybindings
+- [ ] Loading indicator for asset cache (silent ~1s blank at startup, stocks.go:17)
+- [ ] Tooltip/help on order form fields (market vs limit, TIF, etc.)
+- [ ] Crosshair / hover readout on chart (price + time at cursor)
+
+### Ease of use
+- [ ] `/` or `:` command palette (jump to symbol, switch tab, place order by keystroke)
+- [ ] Configurable keybindings (currently all hardcoded in main.go)
+- [ ] Configurable auto-refresh period (main.go:1303, currently 10s) and tick rate (main.go:1304)
+- [ ] Configurable HTTP timeout (api.go:73, currently 10s)
+- [ ] Configurable `trades.csv` path (currently always CWD, main.go:1236)
+- [ ] Session persistence — last tab, last symbol, chart zoom/timeframe per symbol
+- [ ] Runtime paper ↔ live toggle (currently requires re-running setup, config.go:118-122)
+- [ ] Multi-account support (single credentials.json today)
+
+### Future prospects
+- [ ] Saved watchlists / custom symbol groups
+- [ ] Price alerts + fill notifications (system notify on filled orders)
+- [ ] News + sentiment panel (earnings calendar, headline feed)
+- [ ] Symbol screener (filter by technicals / fundamentals)
+- [ ] Position-sizing calculator + portfolio heat-map
+- [ ] Trade history filter / search / replay (beyond raw CSV)
+- [ ] Export: PDF report, JSON, streaming webhook
+
+### Major updates
+- [ ] Indicator suite: MACD, RSI, Bollinger Bands, Stochastic, VWAP (continuation of in-progress item)
+- [ ] Dynamic Y-axis rescaling (currently rigid per CLAUDE.md)
+- [ ] Advanced orders: bracket, OCO (one-cancels-other), trailing stop
+- [ ] Options chain + options orders
+- [ ] Crypto + multi-asset support
+- [ ] Test coverage for order placement, cancellation, modal flows, CSV logging
+
+---
+
+## ratatui-trading-terminal-rust
+
+### Bugs / polish
+- [ ] app.rs:329 — `.unwrap()` on date construction; convert to `ok_or_else`
+- [ ] app.rs:596,598 — `.unwrap()` on parse paths; guard malformed API responses
+- [ ] ui.rs:40 — silent `_ => {}` catch-all on tab dispatch; log unknown tab
+- [ ] No chart-load race protection (Go uses `chartLoadGen atomic.Int64`); slow responses can clobber newer ones
+- [ ] input.rs:13 — `DOUBLE_CLICK_MS = 500` declared but no double-click handling wired up
+- [ ] input.rs:1245+ — dead/unreachable scroll code in test module
+
+### UI changes
+- [ ] Render chart hover crosshair (state exists: `hover: Option<(u16, u16)>` but never drawn)
+- [ ] Enable mouse handling (events are stubbed with `#[allow(unused_imports)]`)
+- [ ] Braille / thick-line chart rendering parity with Go terminal
+- [ ] Loading indicator for supply-chain LLM call (multi-second blocking fetch)
+
+### Ease of use
+- [ ] Configurable tick rate (main.rs:93, currently 250ms)
+- [ ] Configurable indicator periods (EMA=9, SMA=20, RSI=14, MACD=12/26/9 baked in)
+- [ ] Surface FMP + Claude API keys in setup flow (today: env vars only)
+
+### Future prospects
+- [ ] Finish `src/fmp.rs` — `fetch_company_name`, `fetch_peers`, `fetch_supply_records` are stubs
+- [ ] Finish `src/llm.rs` — Claude tool-use `fetch_supply_chain` partially written
+- [ ] Tests for supply-chain tab (TAB_SUPPLYCHAIN currently untested)
+- [ ] Persist supply-chain research between sessions (cache LLM results)
+
+### Major updates
+- [ ] Bring feature parity with canonical Go terminal (CLAUDE.md says port is "feature-matched to early state")
+- [ ] Integration / UI tests (Go has 38 tests using `tcell.SimulationScreen`; Rust has 20 unit tests, no UI tests)
+- [ ] Race-condition tests for concurrent HTTP responses (`TestLoadChartLatestWins` equivalent)
+
+---
+
+## chart-compare-gui-rust
+
+### Bugs / polish
+- [ ] Replace scattered `.unwrap()` calls — api.rs:76,79; compare.rs:301,444,468,512,1403,1434,1438; indicators.rs:129
+- [ ] Warn (don't silently truncate) when `aligned_closes()` clips symbols with very different histories (IPO date mismatches)
+
+### UI changes
+- [ ] Wire up `theme.rs:39` font-size multiplier (placeholder for DPI-aware scaling, never implemented)
+- [ ] Dark / light theme toggle (Bloomberg palette currently hardcoded)
+- [ ] Inline retry / refresh button on failed HTTP — currently shows error text and leaves stale data
+
+### Ease of use
+- [ ] Export / bookmark a chart view (chart tab is currently view-only)
+- [ ] Memory warning for high-dim Monte Carlo runs (10y × 10k sims ≈ 200MB)
+- [ ] Surface / export the Monte Carlo seed so deterministic runs can be replayed
+
+### Future prospects
+- [ ] Save & reload compare workspaces (4-slot set, date range, indicator config)
+- [ ] More indicators on the chart tab (ATR, OBV, Ichimoku)
+- [ ] Cross-asset compare from the chart tab (today only the Compare tab)
+
+### Major updates
+- [ ] UI / rendering tests (workers + API fetch layers are currently untested; only indicators + compare math have tests — 21 total)
+- [ ] Streaming / live-update mode (currently snapshot-only)
+
+---
+
+## backtest-terminal-go
+
+### Bugs / polish
+- [ ] backtest.go:146 — "graceful placeholder" for short-history symbols; revisit to surface a warning vs. silently skipping
+
+### UI changes
+- [ ] Drill-down view per individual trade (current UI shows aggregate table only)
+- [ ] Export / save backtest results (PDF / CSV / JSON)
+
+### Ease of use
+- [ ] Live price refresh in asset dropdown (currently hardcoded snapshot)
+- [ ] Document HMM + Markov-flavored strategies' parameter tuning + edge cases
+
+### Future prospects
+- [ ] Position sizing (currently always all-in / all-out)
+- [ ] Slippage + commission model
+- [ ] Margin model for shorts (today shorts can go arbitrarily negative)
+- [ ] Walk-forward / out-of-sample testing
+- [ ] Strategy combiner (ensemble of the 7 existing strategies)
+
+### Major updates
+- [ ] End-to-end integration test (fetch bars → run strategy → assert results)
+- [ ] Consider extracting shared API / config / stocks code from main-go (today duplicated by design; CLAUDE.md explicitly accepts this — defer unless duplication starts hurting)

@@ -36,6 +36,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         TAB_ORDERS => draw_orders(f, app, layout[2]),
         TAB_ACTIVITY => draw_activity(f, app, layout[2]),
         TAB_CHART => draw_chart(f, app, layout[2]),
+        TAB_SUPPLYCHAIN => draw_supplychain(f, app, layout[2]),
         _ => {}
     }
 
@@ -149,7 +150,8 @@ fn draw_status_bar(f: &mut Frame, app: &App, area: Rect) {
         TAB_ORDERS => "[Q]UIT  [R]/F5 REFRESH  [X]/DEL CANCEL ORDER",
         TAB_POSITIONS => "[Q]UIT  [R]/F5 REFRESH  [↑↓] NAVIGATE",
         TAB_CHART => "[D][W][M][T]YD [Y][F]IVE MA[X]  IND: [E]MA [S]MA [B]B vwa[U] [V]OL r[I]si macd[O]  ←/→ SCROLL · HOVER FOR CROSSHAIR",
-        _ => "[Q]UIT  [R]/F5 REFRESH  [1][2][3][4][5] TABS",
+        TAB_SUPPLYCHAIN => "[TAB] CYCLE PANEL  [ENTER] FETCH / DRILL DOWN  [R] FORCE REFRESH",
+        _ => "[Q]UIT  [R]/F5 REFRESH  [1][2][3][4][5][6] TABS",
     };
     let line = Line::from(vec![
         Span::styled("  PORTFOLIO ", Style::default().fg(ORANGE)),
@@ -912,6 +914,338 @@ fn draw_confirm(
     )))
     .style(Style::default().bg(DARK));
     f.render_widget(hint, layout[2]);
+}
+
+// ── Supply Chain tab ──────────────────────────────────────────────────────────
+
+const SC_CATEGORIES: [SupplyChainCategory; 3] = [
+    SupplyChainCategory::Suppliers,
+    SupplyChainCategory::Competitors,
+    SupplyChainCategory::Customers,
+];
+
+fn draw_supplychain(f: &mut Frame, app: &mut App, area: Rect) {
+    let layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1), // ticker input row
+            Constraint::Length(1), // resolved company name / hint
+            Constraint::Percentage(50), // FMP panel
+            Constraint::Min(0),    // Claude panel
+        ])
+        .split(area);
+
+    // ── Ticker input row ─────────────────────────────────────────────────
+    let input_focused = matches!(app.supply_chain.focused, SupplyChainField::Input);
+    let input_style = if input_focused {
+        Style::default().fg(WHITE).bg(POPUP_BG)
+    } else {
+        Style::default().fg(WHITE).bg(DARK)
+    };
+    let input_display = if input_focused {
+        format!(" {}_ ", app.supply_chain.symbol_input)
+    } else {
+        format!(" {} ", app.supply_chain.symbol_input)
+    };
+    let input_row = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Length(36), Constraint::Min(0)])
+        .split(layout[0]);
+    app.layout.supplychain_input = input_row[0];
+    f.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled("  COMPANY  ", Style::default().fg(ORANGE)),
+            Span::styled(format!("{:<20}", input_display), input_style),
+        ]))
+        .style(Style::default().bg(BLACK)),
+        input_row[0],
+    );
+
+    let queried_blurb = match &app.supply_chain.queried_symbol {
+        Some(sym) => {
+            let fmp_name = app
+                .supply_chain
+                .fmp
+                .data
+                .as_ref()
+                .map(|d| d.company_name.clone())
+                .unwrap_or_default();
+            let claude_name = app
+                .supply_chain
+                .claude
+                .data
+                .as_ref()
+                .map(|d| d.company_name.clone())
+                .unwrap_or_default();
+            let name = if !fmp_name.is_empty() {
+                fmp_name
+            } else if !claude_name.is_empty() {
+                claude_name
+            } else {
+                app.assets.company_name(sym)
+            };
+            if name.is_empty() {
+                format!("Showing supply chain for {}", sym)
+            } else {
+                format!("{}  ({})", name, sym)
+            }
+        }
+        None => "Type a ticker and press Enter to fetch suppliers, competitors, and customers from FMP + Claude.".into(),
+    };
+    f.render_widget(
+        Paragraph::new(Span::styled(
+            format!("  {}", queried_blurb),
+            Style::default().fg(GRAY2),
+        ))
+        .style(Style::default().bg(BLACK)),
+        input_row[1],
+    );
+
+    // Inline status line under the input. Cell 0 dedicated to overall hint.
+    f.render_widget(
+        Paragraph::new(Span::styled(
+            "  Sources rendered side-by-side. Bold matches signal agreement between FMP filings and Claude.",
+            Style::default().fg(GRAY),
+        ))
+        .style(Style::default().bg(BLACK)),
+        layout[1],
+    );
+
+    // Find matching tickers across panels for the agreement highlight.
+    let matches = compute_supplychain_matches(&app.supply_chain);
+
+    draw_supplychain_panel(
+        f,
+        app,
+        layout[2],
+        SupplyChainPanel::Fmp,
+        " FMP — 10-K DISCLOSURES ",
+        &matches,
+    );
+    draw_supplychain_panel(
+        f,
+        app,
+        layout[3],
+        SupplyChainPanel::Claude,
+        " CLAUDE — TRAINING DATA (JAN-2026 CUTOFF) ",
+        &matches,
+    );
+}
+
+fn draw_supplychain_panel(
+    f: &mut Frame,
+    app: &mut App,
+    area: Rect,
+    panel_kind: SupplyChainPanel,
+    title: &str,
+    matches: &[std::collections::HashSet<String>; 3],
+) {
+    let block = panel(title);
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    // Status line at top of panel: loading / error / note
+    let status_h = 1u16;
+    let cells_area = Rect {
+        x: inner.x,
+        y: inner.y + status_h,
+        width: inner.width,
+        height: inner.height.saturating_sub(status_h),
+    };
+
+    let p = app.supply_chain.panel(panel_kind);
+    let status_line = if p.loading {
+        let spin = ['|', '/', '-', '\\'][app.spinner_idx % 4];
+        Line::from(Span::styled(
+            format!("  {} loading…", spin),
+            Style::default().fg(YELLOW),
+        ))
+    } else if let Some(err) = &p.error {
+        Line::from(Span::styled(
+            format!("  ! {}", err),
+            Style::default().fg(RED),
+        ))
+    } else if let Some(d) = &p.data {
+        Line::from(Span::styled(
+            format!("  {}", d.note),
+            Style::default().fg(GRAY2),
+        ))
+    } else {
+        Line::from(Span::styled(
+            "  (no symbol queried yet)",
+            Style::default().fg(GRAY),
+        ))
+    };
+    f.render_widget(
+        Paragraph::new(status_line).style(Style::default().bg(BLACK)),
+        Rect {
+            x: inner.x,
+            y: inner.y,
+            width: inner.width,
+            height: status_h,
+        },
+    );
+
+    // Three side-by-side category columns
+    let col_layout = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage(33),
+            Constraint::Percentage(34),
+            Constraint::Percentage(33),
+        ])
+        .split(cells_area);
+
+    let cell_base = match panel_kind {
+        SupplyChainPanel::Fmp => 0,
+        SupplyChainPanel::Claude => 3,
+    };
+
+    for (i, cat) in SC_CATEGORIES.iter().enumerate() {
+        let rect = col_layout[i];
+        app.layout.supplychain_cells[cell_base + i] = rect;
+        let focused = matches!(
+            app.supply_chain.focused,
+            SupplyChainField::Column(p, c) if p == panel_kind && c == *cat
+        );
+        let col_block = Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Plain)
+            .border_style(Style::default().fg(if focused { CYAN } else { GRAY }))
+            .title(Span::styled(
+                format!(" {} ", cat.label()),
+                Style::default()
+                    .fg(if focused { CYAN } else { ORANGE })
+                    .add_modifier(Modifier::BOLD),
+            ))
+            .style(Style::default().bg(BLACK));
+        let col_inner = col_block.inner(rect);
+        f.render_widget(col_block, rect);
+
+        let rows_data = app.supply_chain.panel(panel_kind).rows_for(*cat);
+        if rows_data.is_empty() && !app.supply_chain.panel(panel_kind).loading {
+            let msg = if app.supply_chain.queried_symbol.is_some() {
+                "  (none reported)"
+            } else {
+                ""
+            };
+            f.render_widget(
+                Paragraph::new(msg).style(Style::default().fg(GRAY2).bg(BLACK)),
+                col_inner,
+            );
+            continue;
+        }
+
+        let selected = app.supply_chain.panel(panel_kind).selected[cat.index()];
+        let cat_matches = &matches[cat.index()];
+
+        let table_rows: Vec<Row> = rows_data
+            .iter()
+            .map(|r| {
+                let ticker_text = r.ticker.clone().unwrap_or_else(|| "—".to_string());
+                let bold = r
+                    .ticker
+                    .as_deref()
+                    .map(|t| cat_matches.contains(t))
+                    .unwrap_or(false);
+                let name_style = if bold {
+                    Style::default().fg(GREEN).add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(WHITE)
+                };
+                let ticker_style = if bold {
+                    Style::default().fg(GREEN).add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(CYAN)
+                };
+                Row::new(vec![
+                    Cell::from(truncate(&r.name, 22)).style(name_style),
+                    Cell::from(ticker_text).style(ticker_style),
+                    Cell::from(truncate(&r.rationale, 36))
+                        .style(Style::default().fg(GRAY2)),
+                ])
+            })
+            .collect();
+
+        let header = Row::new(vec!["NAME", "TICKER", "RATIONALE"])
+            .style(Style::default().fg(ORANGE).add_modifier(Modifier::BOLD));
+
+        let table = Table::new(
+            table_rows,
+            [
+                Constraint::Percentage(40),
+                Constraint::Length(8),
+                Constraint::Min(0),
+            ],
+        )
+        .header(header)
+        .highlight_style(
+            Style::default()
+                .bg(POPUP_BG)
+                .fg(WHITE)
+                .add_modifier(Modifier::BOLD),
+        )
+        .highlight_symbol("> ")
+        .style(Style::default().bg(BLACK));
+
+        let mut state = TableState::default();
+        if focused && !rows_data.is_empty() {
+            state.select(Some(selected.min(rows_data.len() - 1)));
+        }
+        f.render_stateful_widget(table, col_inner, &mut state);
+    }
+
+    // Autocomplete popup when input is focused
+    if matches!(app.supply_chain.focused, SupplyChainField::Input)
+        && app.supply_chain.autocomplete.open
+        && !app.supply_chain.autocomplete.items.is_empty()
+        && matches!(panel_kind, SupplyChainPanel::Fmp)
+    {
+        let popup_y = app.layout.supplychain_input.y + 1;
+        let popup_x = app.layout.supplychain_input.x + 11;
+        let h = app.supply_chain.autocomplete.items.len().min(10) as u16;
+        let popup = Rect {
+            x: popup_x,
+            y: popup_y,
+            width: 50,
+            height: h,
+        };
+        draw_autocomplete(f, &app.supply_chain.autocomplete, popup);
+    }
+}
+
+fn truncate(s: &str, max_chars: usize) -> String {
+    let n = s.chars().count();
+    if n <= max_chars {
+        s.to_string()
+    } else {
+        let take = max_chars.saturating_sub(1);
+        format!("{}…", s.chars().take(take).collect::<String>())
+    }
+}
+
+/// For each category, returns the set of tickers that appear in BOTH the FMP
+/// and Claude panel for the same category. Used to bold rows that agree.
+fn compute_supplychain_matches(
+    state: &SupplyChainState,
+) -> [std::collections::HashSet<String>; 3] {
+    let mut out: [std::collections::HashSet<String>; 3] = Default::default();
+    for (i, cat) in SC_CATEGORIES.iter().enumerate() {
+        let fmp_tickers: std::collections::HashSet<String> = state
+            .fmp
+            .rows_for(*cat)
+            .iter()
+            .filter_map(|r| r.ticker.clone())
+            .collect();
+        let claude_tickers: std::collections::HashSet<String> = state
+            .claude
+            .rows_for(*cat)
+            .iter()
+            .filter_map(|r| r.ticker.clone())
+            .collect();
+        out[i] = fmp_tickers.intersection(&claude_tickers).cloned().collect();
+    }
+    out
 }
 
 // ── Shared helpers ────────────────────────────────────────────────────────────

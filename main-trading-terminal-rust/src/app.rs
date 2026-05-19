@@ -12,6 +12,7 @@ use crate::api::{AlpacaClient, Bar};
 use crate::chart;
 use crate::compare::CompareState;
 use crate::stocks::AssetCache;
+use crate::terminal::TerminalState;
 use crate::theme;
 use crate::workers::{self, Msg};
 
@@ -19,6 +20,7 @@ use crate::workers::{self, Msg};
 pub enum Tab {
     Chart,
     Compare,
+    Terminal,
 }
 
 /// Indicator toggles + their (default) periods. Matches the tview/ratatui
@@ -145,6 +147,12 @@ pub struct ChartApp {
 
     pub current_tab: Tab,
     pub compare: CompareState,
+    pub terminal: TerminalState,
+    /// Tracks whether the Terminal tab has been opened at least once — used
+    /// to kick off the initial /account, /positions, /orders, /activities
+    /// fetches lazily (no point spending API calls on a tab the user hasn't
+    /// visited).
+    pub terminal_primed: bool,
 }
 
 impl ChartApp {
@@ -172,12 +180,14 @@ impl ChartApp {
             zoom_x: true,
             zoom_y: false,
             strategy_enabled: false,
-            current_tab: Tab::Chart,
+            current_tab: Tab::Terminal,
             compare: CompareState::new(),
+            terminal: TerminalState::new(),
+            terminal_primed: false,
         }
     }
 
-    fn drain_messages(&mut self) {
+    fn drain_messages(&mut self, ctx: &egui::Context) {
         while let Ok(msg) = self.rx.try_recv() {
             match msg {
                 Msg::Assets(Ok(a)) => self.assets.load(a),
@@ -229,6 +239,112 @@ impl ChartApp {
                         self.compare.mc_results = None;
                     }
                 }
+                // ---- Terminal tab fetches ----
+                Msg::Positions(result) => {
+                    self.terminal.positions_loading = false;
+                    match result {
+                        Ok(v) => { self.terminal.positions = v; self.terminal.positions_err.clear(); }
+                        Err(e) => self.terminal.positions_err = e.to_string(),
+                    }
+                }
+                Msg::AccountInfo(result) => match result {
+                    Ok(a) => { self.terminal.account = Some(a); self.terminal.account_err.clear(); }
+                    Err(e) => self.terminal.account_err = e.to_string(),
+                },
+                Msg::OpenOrders(result) => {
+                    self.terminal.orders_loading = false;
+                    match result {
+                        Ok(v) => {
+                            // Drop any "cancelling…" hints whose orders are
+                            // no longer in the open list (Alpaca confirmed
+                            // the cancel landed).
+                            let live: std::collections::HashSet<_> =
+                                v.iter().map(|o| o.id.clone()).collect();
+                            self.terminal.cancelling.retain(|id| live.contains(id));
+                            self.terminal.open_orders = v;
+                            self.terminal.open_orders_err.clear();
+                        }
+                        Err(e) => self.terminal.open_orders_err = e.to_string(),
+                    }
+                }
+                Msg::ClosedOrders(result) => {
+                    if let Ok(v) = result { self.terminal.closed_orders = v; }
+                }
+                Msg::Activities(result) => {
+                    self.terminal.activity_loading = false;
+                    match result {
+                        Ok(v) => { self.terminal.activities = v; self.terminal.activity_err.clear(); }
+                        Err(e) => self.terminal.activity_err = e.to_string(),
+                    }
+                }
+                Msg::OrderPlaced { req_summary, result } => {
+                    self.terminal.form.busy = false;
+                    match result {
+                        Ok(o) => {
+                            self.terminal.form.result = format!(
+                                "Placed {} — order id {} (status: {})",
+                                req_summary,
+                                &o.id[..o.id.len().min(8)],
+                                o.status
+                            );
+                            self.terminal.form.result_color = theme::GREEN;
+                            // Clear the form so the next order doesn't
+                            // accidentally reuse stale qty/limit.
+                            self.terminal.form.symbol_input.clear();
+                            self.terminal.form.qty_input.clear();
+                            self.terminal.form.limit_input.clear();
+                            self.terminal.form.autocomplete.clear();
+                            // Immediate refresh so the new order shows up
+                            // on Positions / Orders without waiting 10s.
+                            self.terminal.refresh_all(
+                                self.client.clone(),
+                                self.tx.clone(),
+                                ctx,
+                            );
+                        }
+                        Err(e) => {
+                            self.terminal.form.result = format!(
+                                "Failed to place {}: {}",
+                                req_summary, e
+                            );
+                            self.terminal.form.result_color = theme::RED;
+                        }
+                    }
+                }
+                Msg::OrderCancelled { id, result } => {
+                    self.terminal.cancelling.remove(&id);
+                    if result.is_ok() {
+                        self.terminal
+                            .open_orders
+                            .retain(|o| o.id != id);
+                        self.terminal.refresh_all(
+                            self.client.clone(),
+                            self.tx.clone(),
+                            ctx,
+                        );
+                    }
+                }
+                Msg::TradeChartBars { symbol, gen, bars } => {
+                    // Stale-response guard — drop responses whose gen lags
+                    // the latest, or whose symbol no longer matches what's
+                    // displayed.
+                    if gen != self.terminal.trade_chart.gen
+                        || symbol != self.terminal.trade_chart.symbol
+                    {
+                        continue;
+                    }
+                    self.terminal.trade_chart.loading = false;
+                    match bars {
+                        Ok(b) => {
+                            self.terminal.trade_chart.bars = b;
+                            self.terminal.trade_chart.err.clear();
+                        }
+                        Err(e) => {
+                            self.terminal.trade_chart.bars.clear();
+                            self.terminal.trade_chart.err = e.to_string();
+                        }
+                    }
+                }
             }
         }
     }
@@ -262,39 +378,51 @@ impl ChartApp {
 
 impl EApp for ChartApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        self.drain_messages();
+        self.drain_messages(ctx);
 
-        // Indicator-toggle hotkeys only fire on the Chart tab — they'd be
-        // invisible (and confusing) on Compare. The focused-widget guard
-        // keeps them from stealing letters typed into any text field.
+        let focused = ctx.memory(|m| m.focused().is_some());
         let pressed = |k: Key| ctx.input(|i| i.key_pressed(k));
-        if self.current_tab == Tab::Chart && !ctx.memory(|m| m.focused().is_some()) {
-            if pressed(Key::V) {
-                self.indicators.volume = !self.indicators.volume;
-            }
-            if pressed(Key::B) {
-                self.indicators.bollinger = !self.indicators.bollinger;
-            }
-            if pressed(Key::S) {
-                self.indicators.sma = !self.indicators.sma;
-            }
-            if pressed(Key::E) {
-                self.indicators.ema = !self.indicators.ema;
-            }
-            if pressed(Key::U) {
-                self.indicators.vwap = !self.indicators.vwap;
-            }
-            if pressed(Key::I) {
-                self.indicators.rsi = !self.indicators.rsi;
-            }
-            if pressed(Key::O) {
-                self.indicators.macd = !self.indicators.macd;
+
+        // Top-tab number hotkeys 1/2/3 — fire only when no field is focused
+        // so they don't steal "1" / "2" typed into a quantity or symbol box.
+        if !focused {
+            // Chart-tab indicator hotkeys (V B S E U I O) are intentionally
+            // gated to Chart only; they'd be silent (and weird) on Compare
+            // or Terminal.
+            if self.current_tab == Tab::Chart {
+                if pressed(Key::V) { self.indicators.volume = !self.indicators.volume; }
+                if pressed(Key::B) { self.indicators.bollinger = !self.indicators.bollinger; }
+                if pressed(Key::S) { self.indicators.sma = !self.indicators.sma; }
+                if pressed(Key::E) { self.indicators.ema = !self.indicators.ema; }
+                if pressed(Key::U) { self.indicators.vwap = !self.indicators.vwap; }
+                if pressed(Key::I) { self.indicators.rsi = !self.indicators.rsi; }
+                if pressed(Key::O) { self.indicators.macd = !self.indicators.macd; }
             }
         }
 
         egui::TopBottomPanel::top("tab_strip").show(ctx, |ui| {
             self.render_tab_strip(ui);
         });
+
+        // Lazy first-visit prime + 10s auto-refresh — only while we're
+        // actually looking at the Terminal tab. No point burning API calls
+        // on a tab nobody has opened.
+        if self.current_tab == Tab::Terminal {
+            if !self.terminal_primed {
+                self.terminal_primed = true;
+                self.terminal.refresh_all(self.client.clone(), self.tx.clone(), ctx);
+            } else if self
+                .terminal
+                .last_refresh
+                .map(|t| t.elapsed() >= std::time::Duration::from_secs(10))
+                .unwrap_or(true)
+            {
+                self.terminal.refresh_all(self.client.clone(), self.tx.clone(), ctx);
+            }
+            // Wake again in 1s so the auto-refresh fires close to schedule
+            // even if the user isn't moving the mouse.
+            ctx.request_repaint_after(std::time::Duration::from_secs(1));
+        }
 
         match self.current_tab {
             Tab::Chart => {
@@ -309,6 +437,17 @@ impl EApp for ChartApp {
                 egui::CentralPanel::default().show(ctx, |ui| {
                     crate::compare::render(
                         &mut self.compare,
+                        self.client.clone(),
+                        self.tx.clone(),
+                        &self.assets,
+                        ui,
+                    );
+                });
+            }
+            Tab::Terminal => {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    crate::terminal::render(
+                        &mut self.terminal,
                         self.client.clone(),
                         self.tx.clone(),
                         &self.assets,
@@ -331,7 +470,11 @@ impl ChartApp {
                     .size(15.0),
             );
             ui.separator();
-            for (tab, label) in [(Tab::Chart, "Chart"), (Tab::Compare, "Compare")] {
+            for (tab, label) in [
+                (Tab::Terminal, "Trading Terminal"),
+                (Tab::Chart, "Chart"),
+                (Tab::Compare, "Compare"),
+            ] {
                 let active = self.current_tab == tab;
                 let text = format!("  {}  ", label);
                 let btn = if active {
@@ -365,12 +508,17 @@ impl ChartApp {
             ui.label(RichText::new("SYMBOL").color(theme::ORANGE).strong());
             let resp = ui.add(
                 egui::TextEdit::singleline(&mut self.symbol_input)
-                    .desired_width(110.0)
-                    .hint_text("AAPL"),
+                    .desired_width(110.0),
             );
             if resp.changed() {
                 self.symbol_input = self.symbol_input.to_uppercase();
                 self.refresh_autocomplete();
+            }
+            // Esc while focused on the symbol field dismisses suggestions
+            // without clearing the input.
+            if resp.has_focus() && ui.input(|i| i.key_pressed(Key::Escape)) {
+                self.autocomplete.clear();
+                self.autocomplete_open = false;
             }
             let submitted = resp.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
             if ui.button(" Load ").clicked() || submitted {
@@ -383,27 +531,41 @@ impl ChartApp {
             if !name.is_empty() {
                 ui.label(RichText::new(name).color(theme::CYAN));
             }
-            // Autocomplete suggestions appear inline (small popup below
-            // would be nicer; this is functional and doesn't need positioning math)
-            if resp.has_focus() && !self.autocomplete.is_empty() {
-                let suggestions = self.autocomplete.clone();
-                ui.separator();
-                ui.horizontal_wrapped(|ui| {
-                    for (sym, _name) in suggestions.iter().take(6) {
-                        if ui
-                            .add(egui::Button::new(RichText::new(sym).color(theme::CYAN)).fill(theme::DARK))
-                            .clicked()
-                        {
-                            self.symbol_input = sym.clone();
-                            self.autocomplete.clear();
-                            self.autocomplete_open = false;
-                            let ctx = ui.ctx().clone();
-                            self.kick_off_load(&ctx);
-                        }
-                    }
-                });
-            }
         });
+
+        // Autocomplete suggestions render on their OWN row beneath the
+        // symbol input. They used to be gated on `resp.has_focus()`, but
+        // egui blurs the TextEdit during the same frame the user clicks on
+        // a suggestion (the click lands outside the TextEdit's rect, which
+        // triggers `surrender_focus_on_click_outside`). That meant the
+        // buttons were un-rendered before the click could land — silent
+        // dead clicks. Showing them whenever the list is non-empty and
+        // clearing explicitly on commit/Esc avoids the focus race entirely.
+        if !self.autocomplete.is_empty() {
+            let suggestions = self.autocomplete.clone();
+            ui.horizontal_wrapped(|ui| {
+                ui.label(RichText::new("↳").color(theme::GRAY2));
+                // Tickers only — the company-name match still happens
+                // inside `AssetCache::filter`, so typing "apple" finds
+                // AAPL; we just don't need to render the long name in
+                // every chip.
+                for (sym, _name) in suggestions.iter().take(6) {
+                    if ui
+                        .add(
+                            egui::Button::new(RichText::new(sym).color(theme::CYAN))
+                                .fill(theme::DARK),
+                        )
+                        .clicked()
+                    {
+                        self.symbol_input = sym.clone();
+                        self.autocomplete.clear();
+                        self.autocomplete_open = false;
+                        let ctx = ui.ctx().clone();
+                        self.kick_off_load(&ctx);
+                    }
+                }
+            });
+        }
 
         // Range pills + CANDLE pills
         ui.add_space(2.0);

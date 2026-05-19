@@ -9,6 +9,7 @@ mod config;
 mod indicators;
 mod stocks;
 mod strategies;
+mod terminal;
 mod theme;
 mod workers;
 

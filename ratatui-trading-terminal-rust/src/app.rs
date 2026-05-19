@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::mpsc::Sender;
 use std::sync::Arc;
 use std::time::Instant;
@@ -7,6 +8,8 @@ use ratatui::layout::Rect;
 use ratatui::style::Color;
 
 use crate::api::{Activity, AlpacaClient, Bar, Order, OrderRequest, Position};
+use crate::fmp::FmpClient;
+use crate::llm::ClaudeClient;
 use crate::stocks::AssetCache;
 use crate::theme::*;
 
@@ -16,7 +19,8 @@ pub const TAB_TRADE: usize = 1;
 pub const TAB_ORDERS: usize = 2;
 pub const TAB_ACTIVITY: usize = 3;
 pub const TAB_CHART: usize = 4;
-pub const TAB_COUNT: usize = 5;
+pub const TAB_SUPPLYCHAIN: usize = 5;
+pub const TAB_COUNT: usize = 6;
 
 pub const TAB_LABELS: [&str; TAB_COUNT] = [
     " [1] POSITIONS ",
@@ -24,6 +28,7 @@ pub const TAB_LABELS: [&str; TAB_COUNT] = [
     " [3] ORDERS ",
     " [4] ACTIVITY ",
     " [5] CHART ",
+    " [6] SUPPLY CHAIN ",
 ];
 
 // ── Background messages ───────────────────────────────────────────────────────
@@ -45,6 +50,123 @@ pub enum Msg {
     },
     OrderPlaced(anyhow::Result<Order>, OrderRequest),
     OrderCanceled(anyhow::Result<()>, String),
+    SupplyChainFmp(String, anyhow::Result<SupplyChainData>),
+    SupplyChainClaude(String, anyhow::Result<SupplyChainData>),
+}
+
+// ── Supply chain types ────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone)]
+pub struct SupplyChainData {
+    pub company_name: String,
+    pub suppliers: Vec<Relation>,
+    pub competitors: Vec<Relation>,
+    pub customers: Vec<Relation>,
+    pub note: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct Relation {
+    pub name: String,
+    pub ticker: Option<String>,
+    pub rationale: String,
+}
+
+#[derive(Copy, Clone, PartialEq, Eq)]
+pub enum SupplyChainPanel {
+    Fmp,
+    Claude,
+}
+
+#[derive(Copy, Clone, PartialEq, Eq)]
+pub enum SupplyChainCategory {
+    Suppliers,
+    Competitors,
+    Customers,
+}
+
+impl SupplyChainCategory {
+    pub fn index(self) -> usize {
+        match self {
+            SupplyChainCategory::Suppliers => 0,
+            SupplyChainCategory::Competitors => 1,
+            SupplyChainCategory::Customers => 2,
+        }
+    }
+    pub fn label(self) -> &'static str {
+        match self {
+            SupplyChainCategory::Suppliers => "SUPPLIERS",
+            SupplyChainCategory::Competitors => "COMPETITORS",
+            SupplyChainCategory::Customers => "CUSTOMERS",
+        }
+    }
+}
+
+#[derive(Copy, Clone, PartialEq, Eq)]
+pub enum SupplyChainField {
+    Input,
+    Column(SupplyChainPanel, SupplyChainCategory),
+}
+
+#[derive(Default)]
+pub struct SourcePanel {
+    pub data: Option<SupplyChainData>,
+    pub loading: bool,
+    pub error: Option<String>,
+    pub selected: [usize; 3],
+}
+
+impl SourcePanel {
+    pub fn rows_for(&self, cat: SupplyChainCategory) -> &[Relation] {
+        match &self.data {
+            None => &[],
+            Some(d) => match cat {
+                SupplyChainCategory::Suppliers => &d.suppliers,
+                SupplyChainCategory::Competitors => &d.competitors,
+                SupplyChainCategory::Customers => &d.customers,
+            },
+        }
+    }
+}
+
+pub struct SupplyChainState {
+    pub symbol_input: String,
+    pub autocomplete: Autocomplete,
+    pub focused: SupplyChainField,
+    pub queried_symbol: Option<String>,
+    pub fmp: SourcePanel,
+    pub claude: SourcePanel,
+    pub fmp_cache: HashMap<String, SupplyChainData>,
+    pub claude_cache: HashMap<String, SupplyChainData>,
+}
+
+impl SupplyChainState {
+    pub fn new() -> Self {
+        SupplyChainState {
+            symbol_input: String::new(),
+            autocomplete: Autocomplete::new(),
+            focused: SupplyChainField::Input,
+            queried_symbol: None,
+            fmp: SourcePanel::default(),
+            claude: SourcePanel::default(),
+            fmp_cache: HashMap::new(),
+            claude_cache: HashMap::new(),
+        }
+    }
+
+    pub fn panel(&self, p: SupplyChainPanel) -> &SourcePanel {
+        match p {
+            SupplyChainPanel::Fmp => &self.fmp,
+            SupplyChainPanel::Claude => &self.claude,
+        }
+    }
+
+    pub fn panel_mut(&mut self, p: SupplyChainPanel) -> &mut SourcePanel {
+        match p {
+            SupplyChainPanel::Fmp => &mut self.fmp,
+            SupplyChainPanel::Claude => &mut self.claude,
+        }
+    }
 }
 
 // ── Trade form ────────────────────────────────────────────────────────────────
@@ -351,6 +473,11 @@ pub struct LayoutRects {
     pub chart_ind_hits: Vec<(u16, u16)>,
     pub chart_canvas: Rect,
 
+    pub supplychain_input: Rect,
+    /// One rect per (panel, category) cell — 2 panels × 3 categories = 6 entries
+    /// in this order: FMP Suppliers/Competitors/Customers, Claude Suppliers/Competitors/Customers.
+    pub supplychain_cells: [Rect; 6],
+
     pub modal_left_btn: Rect,
     pub modal_right_btn: Rect,
 }
@@ -359,6 +486,8 @@ pub struct LayoutRects {
 
 pub struct App {
     pub client: Arc<AlpacaClient>,
+    pub claude: Arc<ClaudeClient>,
+    pub fmp: Arc<FmpClient>,
     pub assets: Arc<AssetCache>,
     pub tx: Sender<Msg>,
 
@@ -374,6 +503,7 @@ pub struct App {
 
     pub trade: TradeForm,
     pub chart: ChartState,
+    pub supply_chain: SupplyChainState,
 
     pub result_msg: String,
     pub result_color: Color,
@@ -392,9 +522,17 @@ pub struct App {
 }
 
 impl App {
-    pub fn new(client: Arc<AlpacaClient>, assets: Arc<AssetCache>, tx: Sender<Msg>) -> Self {
+    pub fn new(
+        client: Arc<AlpacaClient>,
+        claude: Arc<ClaudeClient>,
+        fmp: Arc<FmpClient>,
+        assets: Arc<AssetCache>,
+        tx: Sender<Msg>,
+    ) -> Self {
         App {
             client,
+            claude,
+            fmp,
             assets,
             tx,
             active_tab: TAB_POSITIONS,
@@ -407,6 +545,7 @@ impl App {
             activity_selected: 0,
             trade: TradeForm::new(),
             chart: ChartState::new(),
+            supply_chain: SupplyChainState::new(),
             result_msg: String::new(),
             result_color: WHITE,
             modal: None,

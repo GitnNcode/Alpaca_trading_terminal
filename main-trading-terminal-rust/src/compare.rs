@@ -680,12 +680,15 @@ fn render_picker(
             ui.label(RichText::new("ADD").color(theme::ORANGE).strong());
             let resp = ui.add(
                 egui::TextEdit::singleline(&mut state.input)
-                    .desired_width(110.0)
-                    .hint_text("AAPL"),
+                    .desired_width(110.0),
             );
             if resp.changed() {
                 state.input = state.input.to_uppercase();
                 state.refresh_autocomplete(assets);
+            }
+            // Esc dismisses suggestions without clearing the input.
+            if resp.has_focus() && ui.input(|i| i.key_pressed(Key::Escape)) {
+                state.autocomplete.clear();
             }
             let submitted =
                 resp.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
@@ -694,33 +697,36 @@ fn render_picker(
                 state.autocomplete.clear();
                 state.add_symbol(s, client.clone(), tx.clone(), ui.ctx());
             }
-            // Autocomplete chips
-            if resp.has_focus() && !state.autocomplete.is_empty() {
-                let suggestions = state.autocomplete.clone();
-                for (sym, _name) in suggestions.iter().take(6) {
-                    if ui
-                        .add(
-                            egui::Button::new(
-                                RichText::new(sym).color(theme::CYAN),
-                            )
-                            .fill(theme::DARK),
-                        )
-                        .clicked()
-                    {
-                        state
-                            .add_symbol(
-                                sym.clone(),
-                                client.clone(),
-                                tx.clone(),
-                                ui.ctx(),
-                            );
-                        state.input.clear();
-                        state.autocomplete.clear();
-                    }
-                }
-            }
         }
     });
+
+    // Autocomplete chips for the ADD-slot input. Rendered OUTSIDE the slot
+    // bar's horizontal_wrapped so they get a clean row of their own — and,
+    // critically, without the old `resp.has_focus()` gate: egui surrenders
+    // the TextEdit's focus the same frame the user clicks on a chip, which
+    // made the chip vanish before its click could register.
+    if !state.autocomplete.is_empty() {
+        let suggestions = state.autocomplete.clone();
+        ui.horizontal_wrapped(|ui| {
+            ui.label(RichText::new("    ↳").color(theme::GRAY2));
+            // Tickers only — `AssetCache::filter` already matches on
+            // company name as a fallback, so typing "apple" still finds
+            // AAPL; we just don't render the long name in every chip.
+            for (sym, _name) in suggestions.iter().take(6) {
+                if ui
+                    .add(
+                        egui::Button::new(RichText::new(sym).color(theme::CYAN))
+                            .fill(theme::DARK),
+                    )
+                    .clicked()
+                {
+                    state.add_symbol(sym.clone(), client.clone(), tx.clone(), ui.ctx());
+                    state.input.clear();
+                    state.autocomplete.clear();
+                }
+            }
+        });
+    }
 
     // Range pills + lock toggle. The lock toggle decides whether the chart
     // pane captures wheel/drag (interactive) or the outer page does (locked).

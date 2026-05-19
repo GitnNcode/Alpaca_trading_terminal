@@ -2,8 +2,10 @@ mod api;
 mod app;
 mod chart;
 mod config;
+mod fmp;
 mod indicators;
 mod input;
+mod llm;
 mod setup;
 mod stocks;
 mod theme;
@@ -25,6 +27,8 @@ use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
 
 use crate::api::AlpacaClient;
+use crate::fmp::FmpClient;
+use crate::llm::ClaudeClient;
 use crate::stocks::AssetCache;
 
 fn main() -> Result<()> {
@@ -69,11 +73,19 @@ fn run(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Result<()> {
         },
     };
 
+    let claude = Arc::new(ClaudeClient::new(creds.anthropic_api_key.clone()));
+    let fmp = Arc::new(FmpClient::new(creds.fmp_api_key.clone()));
     let client = Arc::new(AlpacaClient::new(creds));
     let assets = Arc::new(AssetCache::new());
     let (tx, rx) = mpsc::channel::<app::Msg>();
 
-    let mut app = app::App::new(client.clone(), assets.clone(), tx.clone());
+    let mut app = app::App::new(
+        client.clone(),
+        claude.clone(),
+        fmp.clone(),
+        assets.clone(),
+        tx.clone(),
+    );
 
     workers::spawn_assets(client.clone(), tx.clone());
     workers::spawn_refresh(client.clone(), tx.clone());

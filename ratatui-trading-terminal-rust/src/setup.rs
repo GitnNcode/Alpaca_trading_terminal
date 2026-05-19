@@ -80,6 +80,8 @@ impl SetupState {
             api_key: key,
             api_secret: secret,
             base_url,
+            anthropic_api_key: None,
+            fmp_api_key: None,
         });
     }
 }

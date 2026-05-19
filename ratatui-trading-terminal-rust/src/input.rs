@@ -39,6 +39,7 @@ pub fn handle_key(app: &mut App, key: KeyEvent) {
         TAB_ORDERS => handle_orders_key(app, key),
         TAB_ACTIVITY => handle_activity_key(app, key),
         TAB_CHART => handle_chart_key(app, key),
+        TAB_SUPPLYCHAIN => handle_supplychain_key(app, key),
         _ => {}
     }
 }
@@ -50,6 +51,7 @@ fn handle_global_letter(app: &mut App, c: char) -> bool {
         '3' => { app.switch_tab(TAB_ORDERS); true }
         '4' => { app.switch_tab(TAB_ACTIVITY); true }
         '5' => { app.switch_tab(TAB_CHART); true }
+        '6' => { app.switch_tab(TAB_SUPPLYCHAIN); true }
         'r' | 'R' => { workers::spawn_refresh(app.client.clone(), app.tx.clone()); true }
         'q' | 'Q' => { app.should_quit = true; true }
         _ => false,
@@ -544,6 +546,261 @@ pub fn load_chart(app: &mut App, symbol: String) {
     );
 }
 
+// ── Supply Chain tab ──────────────────────────────────────────────────────────
+
+const SC_PANELS: [SupplyChainPanel; 2] = [SupplyChainPanel::Fmp, SupplyChainPanel::Claude];
+const SC_CATS: [SupplyChainCategory; 3] = [
+    SupplyChainCategory::Suppliers,
+    SupplyChainCategory::Competitors,
+    SupplyChainCategory::Customers,
+];
+
+fn sc_next_field(field: SupplyChainField) -> SupplyChainField {
+    match field {
+        SupplyChainField::Input => {
+            SupplyChainField::Column(SupplyChainPanel::Fmp, SupplyChainCategory::Suppliers)
+        }
+        SupplyChainField::Column(panel, cat) => {
+            let i = cat.index();
+            if i < 2 {
+                SupplyChainField::Column(panel, SC_CATS[i + 1])
+            } else if panel == SupplyChainPanel::Fmp {
+                SupplyChainField::Column(SupplyChainPanel::Claude, SupplyChainCategory::Suppliers)
+            } else {
+                SupplyChainField::Input
+            }
+        }
+    }
+}
+
+fn sc_prev_field(field: SupplyChainField) -> SupplyChainField {
+    match field {
+        SupplyChainField::Input => {
+            SupplyChainField::Column(SupplyChainPanel::Claude, SupplyChainCategory::Customers)
+        }
+        SupplyChainField::Column(panel, cat) => {
+            let i = cat.index();
+            if i > 0 {
+                SupplyChainField::Column(panel, SC_CATS[i - 1])
+            } else if panel == SupplyChainPanel::Claude {
+                SupplyChainField::Column(SupplyChainPanel::Fmp, SupplyChainCategory::Customers)
+            } else {
+                SupplyChainField::Input
+            }
+        }
+    }
+}
+
+pub fn handle_supplychain_key(app: &mut App, key: KeyEvent) {
+    // Autocomplete in symbol input
+    if matches!(app.supply_chain.focused, SupplyChainField::Input)
+        && app.supply_chain.autocomplete.open
+    {
+        match key.code {
+            KeyCode::Down => {
+                if !app.supply_chain.autocomplete.items.is_empty() {
+                    app.supply_chain.autocomplete.selected = (app.supply_chain.autocomplete.selected
+                        + 1)
+                        % app.supply_chain.autocomplete.items.len();
+                }
+                return;
+            }
+            KeyCode::Up => {
+                if !app.supply_chain.autocomplete.items.is_empty() {
+                    if app.supply_chain.autocomplete.selected == 0 {
+                        app.supply_chain.autocomplete.selected =
+                            app.supply_chain.autocomplete.items.len() - 1;
+                    } else {
+                        app.supply_chain.autocomplete.selected -= 1;
+                    }
+                }
+                return;
+            }
+            KeyCode::Enter => {
+                if let Some((sym, _)) = app
+                    .supply_chain
+                    .autocomplete
+                    .items
+                    .get(app.supply_chain.autocomplete.selected)
+                    .cloned()
+                {
+                    app.supply_chain.symbol_input = sym.clone();
+                    app.supply_chain.autocomplete.close();
+                    submit_supplychain(app, false);
+                }
+                return;
+            }
+            KeyCode::Esc => {
+                app.supply_chain.autocomplete.close();
+                return;
+            }
+            _ => {}
+        }
+    }
+
+    match key.code {
+        KeyCode::Esc => {
+            // Esc clears focus / autocomplete; second Esc quits like other tabs.
+            if app.supply_chain.autocomplete.open {
+                app.supply_chain.autocomplete.close();
+            } else if !matches!(app.supply_chain.focused, SupplyChainField::Input) {
+                app.supply_chain.focused = SupplyChainField::Input;
+            } else {
+                app.should_quit = true;
+            }
+        }
+        KeyCode::Tab => app.supply_chain.focused = sc_next_field(app.supply_chain.focused),
+        KeyCode::BackTab => app.supply_chain.focused = sc_prev_field(app.supply_chain.focused),
+        KeyCode::Left => switch_tab_arrow(app, -1),
+        KeyCode::Right => switch_tab_arrow(app, 1),
+        KeyCode::F(5) => workers::spawn_refresh(app.client.clone(), app.tx.clone()),
+        KeyCode::Up => sc_move_selection(app, -1),
+        KeyCode::Down => sc_move_selection(app, 1),
+        KeyCode::Enter => sc_activate(app),
+        KeyCode::Char(c) => match app.supply_chain.focused {
+            SupplyChainField::Input => {
+                if c.is_ascii_alphanumeric() || c == '.' || c == '-' {
+                    app.supply_chain.symbol_input.push(c.to_ascii_uppercase());
+                    let prefix = app.supply_chain.symbol_input.clone();
+                    app.supply_chain.autocomplete.refresh(&prefix, &app.assets);
+                }
+            }
+            SupplyChainField::Column(_, _) => match c {
+                'r' | 'R' => submit_supplychain(app, true),
+                _ => {
+                    handle_global_letter(app, c);
+                }
+            },
+        },
+        KeyCode::Backspace => {
+            if matches!(app.supply_chain.focused, SupplyChainField::Input) {
+                app.supply_chain.symbol_input.pop();
+                let prefix = app.supply_chain.symbol_input.clone();
+                if prefix.is_empty() {
+                    app.supply_chain.autocomplete.close();
+                } else {
+                    app.supply_chain.autocomplete.refresh(&prefix, &app.assets);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn sc_move_selection(app: &mut App, delta: i32) {
+    let SupplyChainField::Column(panel, cat) = app.supply_chain.focused else {
+        return;
+    };
+    let len = app.supply_chain.panel(panel).rows_for(cat).len();
+    if len == 0 {
+        return;
+    }
+    let panel_mut = app.supply_chain.panel_mut(panel);
+    let cur = panel_mut.selected[cat.index()] as i32;
+    let next = (cur + delta).rem_euclid(len as i32) as usize;
+    panel_mut.selected[cat.index()] = next;
+}
+
+fn sc_activate(app: &mut App) {
+    match app.supply_chain.focused {
+        SupplyChainField::Input => submit_supplychain(app, false),
+        SupplyChainField::Column(panel, cat) => {
+            let rows = app.supply_chain.panel(panel).rows_for(cat);
+            let idx = app.supply_chain.panel(panel).selected[cat.index()];
+            let Some(row) = rows.get(idx) else { return };
+            let Some(ticker) = row.ticker.clone() else {
+                app.set_result(
+                    ">> NO TICKER FOR THIS COMPANY — CANNOT DRILL DOWN",
+                    YELLOW,
+                );
+                return;
+            };
+            app.chart.symbol_input = ticker.clone();
+            app.switch_tab(TAB_CHART);
+            load_chart(app, ticker);
+        }
+    }
+}
+
+fn submit_supplychain(app: &mut App, force_refresh: bool) {
+    let sym = app
+        .supply_chain
+        .symbol_input
+        .trim()
+        .to_ascii_uppercase();
+    if sym.is_empty() {
+        app.set_result(">> SYMBOL IS REQUIRED", RED);
+        return;
+    }
+    app.supply_chain.symbol_input = sym.clone();
+    app.supply_chain.autocomplete.close();
+    app.supply_chain.queried_symbol = Some(sym.clone());
+
+    if force_refresh {
+        app.supply_chain.fmp_cache.remove(&sym);
+        app.supply_chain.claude_cache.remove(&sym);
+    }
+
+    // FMP side
+    if let Some(cached) = app.supply_chain.fmp_cache.get(&sym).cloned() {
+        app.supply_chain.fmp = SourcePanel {
+            data: Some(cached),
+            loading: false,
+            error: None,
+            selected: [0; 3],
+        };
+    } else {
+        app.supply_chain.fmp = SourcePanel {
+            data: None,
+            loading: true,
+            error: None,
+            selected: [0; 3],
+        };
+        if app.fmp.is_configured() {
+            workers::spawn_fetch_supplychain_fmp(
+                app.fmp.clone(),
+                app.tx.clone(),
+                sym.clone(),
+            );
+        } else {
+            app.supply_chain.fmp.loading = false;
+            app.supply_chain.fmp.error = Some(
+                "FMP_API_KEY not set — export FMP_API_KEY or save it to credentials.json".into(),
+            );
+        }
+    }
+
+    // Claude side
+    if let Some(cached) = app.supply_chain.claude_cache.get(&sym).cloned() {
+        app.supply_chain.claude = SourcePanel {
+            data: Some(cached),
+            loading: false,
+            error: None,
+            selected: [0; 3],
+        };
+    } else {
+        app.supply_chain.claude = SourcePanel {
+            data: None,
+            loading: true,
+            error: None,
+            selected: [0; 3],
+        };
+        if app.claude.is_configured() {
+            workers::spawn_fetch_supplychain_claude(
+                app.claude.clone(),
+                app.tx.clone(),
+                sym.clone(),
+            );
+        } else {
+            app.supply_chain.claude.loading = false;
+            app.supply_chain.claude.error = Some(
+                "ANTHROPIC_API_KEY not set — export ANTHROPIC_API_KEY or save it to credentials.json"
+                    .into(),
+            );
+        }
+    }
+}
+
 // ── Mouse handling ────────────────────────────────────────────────────────────
 
 pub fn handle_mouse(app: &mut App, ev: MouseEvent) {
@@ -581,7 +838,36 @@ pub fn handle_mouse(app: &mut App, ev: MouseEvent) {
         TAB_ORDERS => handle_mouse_orders(app, ev),
         TAB_ACTIVITY => handle_mouse_activity(app, ev),
         TAB_CHART => handle_mouse_chart(app, ev),
+        TAB_SUPPLYCHAIN => handle_mouse_supplychain(app, ev),
         _ => {}
+    }
+}
+
+fn handle_mouse_supplychain(app: &mut App, ev: MouseEvent) {
+    let MouseEventKind::Down(MouseButton::Left) = ev.kind else {
+        return;
+    };
+    let (x, y) = (ev.column, ev.row);
+    if rect_contains(app.layout.supplychain_input, x, y) {
+        app.supply_chain.focused = SupplyChainField::Input;
+        return;
+    }
+    for (i, rect) in app.layout.supplychain_cells.iter().enumerate() {
+        if rect_contains(*rect, x, y) {
+            let panel = SC_PANELS[i / 3];
+            let cat = SC_CATS[i % 3];
+            app.supply_chain.focused = SupplyChainField::Column(panel, cat);
+            // Translate y inside the cell to a row index (skip the title row).
+            let inner_y = rect.y + 2; // +1 border, +1 column header
+            if y >= inner_y {
+                let row = (y - inner_y) as usize;
+                let rows_len = app.supply_chain.panel(panel).rows_for(cat).len();
+                if row < rows_len {
+                    app.supply_chain.panel_mut(panel).selected[cat.index()] = row;
+                }
+            }
+            return;
+        }
     }
 }
 
@@ -917,6 +1203,40 @@ pub fn handle_msg(app: &mut App, msg: Msg) {
                 }
             }
         }
+        Msg::SupplyChainFmp(symbol, result) => {
+            if app.supply_chain.queried_symbol.as_deref() != Some(symbol.as_str()) {
+                return;
+            }
+            app.supply_chain.fmp.loading = false;
+            match result {
+                Ok(data) => {
+                    app.supply_chain.fmp_cache.insert(symbol, data.clone());
+                    app.supply_chain.fmp.data = Some(data);
+                    app.supply_chain.fmp.error = None;
+                }
+                Err(e) => {
+                    app.supply_chain.fmp.data = None;
+                    app.supply_chain.fmp.error = Some(e.to_string());
+                }
+            }
+        }
+        Msg::SupplyChainClaude(symbol, result) => {
+            if app.supply_chain.queried_symbol.as_deref() != Some(symbol.as_str()) {
+                return;
+            }
+            app.supply_chain.claude.loading = false;
+            match result {
+                Ok(data) => {
+                    app.supply_chain.claude_cache.insert(symbol, data.clone());
+                    app.supply_chain.claude.data = Some(data);
+                    app.supply_chain.claude.error = None;
+                }
+                Err(e) => {
+                    app.supply_chain.claude.data = None;
+                    app.supply_chain.claude.error = Some(e.to_string());
+                }
+            }
+        }
     }
 }
 
@@ -936,10 +1256,14 @@ mod tests {
             api_key: "test".into(),
             api_secret: "test".into(),
             base_url: "https://paper-api.alpaca.markets".into(),
+            anthropic_api_key: None,
+            fmp_api_key: None,
         }));
+        let claude = std::sync::Arc::new(crate::llm::ClaudeClient::new(None));
+        let fmp = std::sync::Arc::new(crate::fmp::FmpClient::new(None));
         let assets = std::sync::Arc::new(AssetCache::new());
         let (tx, _rx) = mpsc::channel();
-        App::new(client, assets, tx)
+        App::new(client, claude, fmp, assets, tx)
     }
 
     fn key(code: KeyCode) -> KeyEvent {
@@ -1137,10 +1461,14 @@ mod indicator_tests {
             api_key: "t".into(),
             api_secret: "t".into(),
             base_url: "https://paper-api.alpaca.markets".into(),
+            anthropic_api_key: None,
+            fmp_api_key: None,
         }));
+        let claude = std::sync::Arc::new(crate::llm::ClaudeClient::new(None));
+        let fmp = std::sync::Arc::new(crate::fmp::FmpClient::new(None));
         let assets = std::sync::Arc::new(crate::stocks::AssetCache::new());
         let (tx, _rx) = std::sync::mpsc::channel();
-        App::new(client, assets, tx)
+        App::new(client, claude, fmp, assets, tx)
     }
 
     #[test]

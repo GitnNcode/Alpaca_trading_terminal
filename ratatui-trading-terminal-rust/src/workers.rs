@@ -6,6 +6,8 @@ use chrono::{Duration as ChronoDuration, Utc};
 
 use crate::api::{AlpacaClient, OrderRequest};
 use crate::app::{chart_start_time, Msg, CHART_RANGES, CHART_TFS};
+use crate::fmp::FmpClient;
+use crate::llm::ClaudeClient;
 
 pub fn spawn_refresh(client: Arc<AlpacaClient>, tx: Sender<Msg>) {
     thread::spawn(move || {
@@ -85,5 +87,19 @@ pub fn spawn_load_chart(
             tf_idx,
             bars,
         });
+    });
+}
+
+pub fn spawn_fetch_supplychain_fmp(client: Arc<FmpClient>, tx: Sender<Msg>, symbol: String) {
+    thread::spawn(move || {
+        let result = client.fetch_supply_chain(&symbol);
+        let _ = tx.send(Msg::SupplyChainFmp(symbol, result));
+    });
+}
+
+pub fn spawn_fetch_supplychain_claude(client: Arc<ClaudeClient>, tx: Sender<Msg>, symbol: String) {
+    thread::spawn(move || {
+        let result = client.fetch_supply_chain(&symbol);
+        let _ = tx.send(Msg::SupplyChainClaude(symbol, result));
     });
 }

@@ -8,6 +8,10 @@ pub struct Credentials {
     pub api_key: String,
     pub api_secret: String,
     pub base_url: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub anthropic_api_key: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fmp_api_key: Option<String>,
 }
 
 pub fn config_path() -> Result<PathBuf> {
