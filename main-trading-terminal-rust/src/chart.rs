@@ -158,10 +158,30 @@ pub fn render(app: &ChartApp, ui: &mut egui::Ui) {
         Vec::new()
     };
 
+    // ── Live-tick overlay ────────────────────────────────────────────────
+    // If the stream has emitted anything for the current symbol since the
+    // last bar's timestamp, patch the historical bars vector so the
+    // rightmost candle reflects the live data:
+    //   * minute bar streamed for a later minute → append a new bar
+    //   * minute bar streamed for the same minute as the last bar → replace
+    //   * trade tick without a fresh bar → mutate close + high/low of the
+    //     last bar (this is what makes 1Day charts move tick-by-tick).
+    // We only build the owned Vec when there's actually a patch to apply,
+    // so the no-stream path stays zero-allocation.
+    let live_tick = app
+        .tick_cache
+        .read()
+        .ok()
+        .and_then(|c| c.get(&app.current_symbol).cloned());
+    let owned_bars = live_tick
+        .as_ref()
+        .and_then(|t| patch_bars_with_live(&app.bars, t));
+    let live_is_active = owned_bars.is_some();
+
     // ── Price panel ──────────────────────────────────────────────────────
-    let bars = app.bars.as_slice();
+    let bars: &[Bar] = owned_bars.as_deref().unwrap_or(app.bars.as_slice());
     let stats = compute_stats(bars);
-    render_header_strip(app, ui, &stats);
+    render_header_strip(app, ui, &stats, live_is_active && app.stream_connected);
 
     let candles = build_candles(bars);
     let ema = if ind.ema {
@@ -226,6 +246,45 @@ pub fn render(app: &ChartApp, ui: &mut egui::Ui) {
             if let Some(values) = &vwap {
                 plot_ui.line(line_for("VWAP", values, theme::YELLOW, 2.0));
             }
+            // ── My own fills ─────────────────────────────────────────────
+            // Project the user's executed buys/sells (from /account/activities
+            // + closed orders) onto the price chart. Diamond markers (vs the
+            // triangle strategy markers) so the eye can tell "what *I* did"
+            // apart from "what the strategy says". Placed at the actual fill
+            // price, not at the bar low/high.
+            let fills = app.terminal.fills_for_symbol(&app.current_symbol);
+            if !fills.is_empty() {
+                let (mut my_buys, mut my_sells) = (Vec::new(), Vec::new());
+                for f in &fills {
+                    let Some(idx) = locate_bar_for_time(bars, f.time) else { continue };
+                    let pt = [idx as f64, f.price];
+                    match f.side {
+                        crate::terminal::FillSide::Buy => my_buys.push(pt),
+                        crate::terminal::FillSide::Sell => my_sells.push(pt),
+                    }
+                }
+                if !my_buys.is_empty() {
+                    plot_ui.points(
+                        Points::new(PlotPoints::new(my_buys))
+                            .shape(MarkerShape::Diamond)
+                            .color(theme::CYAN)
+                            .radius(7.0)
+                            .filled(true)
+                            .name("My buys"),
+                    );
+                }
+                if !my_sells.is_empty() {
+                    plot_ui.points(
+                        Points::new(PlotPoints::new(my_sells))
+                            .shape(MarkerShape::Diamond)
+                            .color(theme::ORANGE)
+                            .radius(7.0)
+                            .filled(true)
+                            .name("My sells"),
+                    );
+                }
+            }
+
             // Strategy Buy/Sell markers — drawn just below each Buy bar's low
             // and just above each Sell bar's high. Sized in plot coordinates
             // so they stay readable through zoom.
@@ -526,6 +585,73 @@ struct Stats {
     bars: usize,
 }
 
+/// Bisect into the bars by timestamp; return the index of the bar that
+/// *covers* `t` (i.e. the latest bar whose open-time is <= `t`). Returns
+/// `None` if `t` is older than every bar.
+fn locate_bar_for_time(bars: &[Bar], t: chrono::DateTime<chrono::Utc>) -> Option<usize> {
+    if bars.is_empty() {
+        return None;
+    }
+    let pp = bars.partition_point(|b| b.time <= t);
+    if pp == 0 {
+        return None;
+    }
+    Some(pp - 1)
+}
+
+/// Apply the most recent streamed price/bar to the historical bars list,
+/// returning `Some(patched)` only when there's something to apply.
+/// See the call site for the three-case explanation.
+fn patch_bars_with_live(historical: &[Bar], live: &crate::stream::LastTick) -> Option<Vec<Bar>> {
+    let last = historical.last()?;
+
+    // Case A: a streamed minute bar exists. It either replaces the last
+    // historical bar (same minute) or appends after it (later minute).
+    if let Some(lb) = live.last_bar {
+        if lb.t == last.time {
+            let mut patched = historical.to_vec();
+            let idx = patched.len() - 1;
+            patched[idx] = Bar {
+                time: lb.t,
+                open: lb.o,
+                high: lb.h,
+                low: lb.l,
+                close: lb.c,
+                volume: lb.v as i64,
+            };
+            return Some(patched);
+        }
+        if lb.t > last.time {
+            let mut patched = historical.to_vec();
+            patched.push(Bar {
+                time: lb.t,
+                open: lb.o,
+                high: lb.h,
+                low: lb.l,
+                close: lb.c,
+                volume: lb.v as i64,
+            });
+            return Some(patched);
+        }
+    }
+
+    // Case B: no fresh minute bar but a recent trade tick — fold it into the
+    // last bar's close/high/low so the candle moves tick-by-tick.
+    if let (Some(lp), Some(updated)) = (live.last_price, live.updated_at) {
+        if updated > last.time {
+            let mut patched = historical.to_vec();
+            let idx = patched.len() - 1;
+            let b = &mut patched[idx];
+            b.close = lp;
+            if lp > b.high { b.high = lp; }
+            if lp < b.low { b.low = lp; }
+            return Some(patched);
+        }
+    }
+
+    None
+}
+
 fn compute_stats(bars: &[Bar]) -> Stats {
     let first = &bars[0];
     let last = &bars[bars.len() - 1];
@@ -558,7 +684,7 @@ fn compute_stats(bars: &[Bar]) -> Stats {
     }
 }
 
-fn render_header_strip(app: &ChartApp, ui: &mut egui::Ui, s: &Stats) {
+fn render_header_strip(app: &ChartApp, ui: &mut egui::Ui, s: &Stats, live: bool) {
     ui.horizontal_wrapped(|ui| {
         ui.label(
             egui::RichText::new(format!(" {} ", app.current_symbol))
@@ -566,6 +692,19 @@ fn render_header_strip(app: &ChartApp, ui: &mut egui::Ui, s: &Stats) {
                 .strong()
                 .size(16.0),
         );
+        // Live indicator — small green pill that says "LIVE" when the
+        // stream has emitted at least one event for this symbol since the
+        // last bar. Tells the user the displayed last close is moving from
+        // the websocket, not a stale poll.
+        if live {
+            ui.label(
+                egui::RichText::new(" • LIVE ")
+                    .color(theme::BLACK)
+                    .background_color(theme::GREEN)
+                    .strong()
+                    .size(11.0),
+            );
+        }
         let chg_color = if s.chg < 0.0 { theme::RED } else { theme::GREEN };
         let sign = if s.chg < 0.0 { "" } else { "+" };
         ui.label(egui::RichText::new(format!("${:.2}", s.last_close)).color(theme::WHITE).size(16.0));
@@ -640,4 +779,116 @@ fn short_volume(v: i64) -> String {
 #[allow(dead_code)]
 fn _unused_axis_hint() -> AxisHints<'static> {
     AxisHints::new_x()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::stream::{LastTick, MinuteBar};
+    use chrono::{TimeZone, Utc};
+
+    fn bar(min: u32, close: f64) -> Bar {
+        Bar {
+            time: Utc.with_ymd_and_hms(2026, 5, 19, 14, min, 0).unwrap(),
+            open: close - 0.5,
+            high: close + 0.5,
+            low: close - 0.7,
+            close,
+            volume: 1000,
+        }
+    }
+
+    #[test]
+    fn no_live_tick_returns_none() {
+        let bars = vec![bar(30, 100.0)];
+        let tick = LastTick::default();
+        assert!(patch_bars_with_live(&bars, &tick).is_none());
+    }
+
+    #[test]
+    fn streamed_minute_bar_for_same_minute_replaces_last() {
+        let bars = vec![bar(30, 100.0), bar(31, 101.0)];
+        let mut tick = LastTick::default();
+        tick.last_bar = Some(MinuteBar {
+            t: bars[1].time,
+            o: 101.0, h: 102.5, l: 100.9, c: 102.3, v: 50.0,
+        });
+        let patched = patch_bars_with_live(&bars, &tick).unwrap();
+        assert_eq!(patched.len(), 2);
+        assert_eq!(patched[1].close, 102.3);
+        assert_eq!(patched[1].high, 102.5);
+    }
+
+    #[test]
+    fn streamed_minute_bar_for_later_minute_appends() {
+        let bars = vec![bar(30, 100.0), bar(31, 101.0)];
+        let mut tick = LastTick::default();
+        tick.last_bar = Some(MinuteBar {
+            t: Utc.with_ymd_and_hms(2026, 5, 19, 14, 32, 0).unwrap(),
+            o: 101.0, h: 101.8, l: 100.95, c: 101.5, v: 30.0,
+        });
+        let patched = patch_bars_with_live(&bars, &tick).unwrap();
+        assert_eq!(patched.len(), 3);
+        assert_eq!(patched[2].close, 101.5);
+    }
+
+    #[test]
+    fn raw_trade_tick_updates_close_and_extremes_when_newer() {
+        let bars = vec![bar(30, 100.0)];
+        let mut tick = LastTick::default();
+        tick.last_price = Some(105.0);
+        tick.updated_at = Some(Utc.with_ymd_and_hms(2026, 5, 19, 14, 30, 45).unwrap());
+        let patched = patch_bars_with_live(&bars, &tick).unwrap();
+        assert_eq!(patched[0].close, 105.0);
+        assert_eq!(patched[0].high, 105.0); // expanded
+        assert_eq!(patched[0].low, bars[0].low);  // unchanged (105 > orig low)
+    }
+
+    #[test]
+    fn stale_trade_tick_is_ignored() {
+        let bars = vec![bar(30, 100.0)];
+        let mut tick = LastTick::default();
+        tick.last_price = Some(105.0);
+        // tick timestamp BEFORE the bar's open time — must not apply.
+        tick.updated_at = Some(Utc.with_ymd_and_hms(2026, 5, 19, 14, 29, 0).unwrap());
+        assert!(patch_bars_with_live(&bars, &tick).is_none());
+    }
+
+    #[test]
+    fn locate_bar_for_time_returns_none_on_empty_or_too_early() {
+        let empty: Vec<Bar> = Vec::new();
+        let t = Utc.with_ymd_and_hms(2026, 5, 19, 12, 0, 0).unwrap();
+        assert_eq!(locate_bar_for_time(&empty, t), None);
+        let bars = vec![bar(30, 100.0)];
+        let earlier = Utc.with_ymd_and_hms(2026, 5, 19, 13, 0, 0).unwrap();
+        assert_eq!(locate_bar_for_time(&bars, earlier), None);
+    }
+
+    #[test]
+    fn locate_bar_for_time_returns_last_bar_with_open_at_or_before() {
+        let bars = vec![bar(30, 100.0), bar(31, 101.0), bar(32, 102.0)];
+        // Halfway through bar at 31 → should hit index 1.
+        let t = Utc.with_ymd_and_hms(2026, 5, 19, 14, 31, 30).unwrap();
+        assert_eq!(locate_bar_for_time(&bars, t), Some(1));
+        // Exactly on bar 32's open → bar 32.
+        let t = Utc.with_ymd_and_hms(2026, 5, 19, 14, 32, 0).unwrap();
+        assert_eq!(locate_bar_for_time(&bars, t), Some(2));
+        // Way after the last bar → still last bar.
+        let t = Utc.with_ymd_and_hms(2026, 5, 19, 20, 0, 0).unwrap();
+        assert_eq!(locate_bar_for_time(&bars, t), Some(2));
+    }
+
+    #[test]
+    fn minute_bar_takes_priority_over_raw_trade() {
+        let bars = vec![bar(30, 100.0)];
+        let mut tick = LastTick::default();
+        tick.last_bar = Some(MinuteBar {
+            t: bars[0].time, o: 100.0, h: 102.0, l: 99.5, c: 101.5, v: 10.0,
+        });
+        // Also include a stale raw trade — shouldn't overwrite the bar update.
+        tick.last_price = Some(999.0);
+        tick.updated_at = Some(bars[0].time);
+        let patched = patch_bars_with_live(&bars, &tick).unwrap();
+        assert_eq!(patched[0].close, 101.5); // from the bar, not from 999.0
+    }
 }

@@ -10,10 +10,14 @@ use egui::{Key, RichText};
 
 use crate::api::{AlpacaClient, Bar};
 use crate::chart;
-use crate::compare::CompareState;
+use crate::command::{self as cmd, Command, Page, Side as CmdSide};
+use crate::compare::{CompareState, COMPARE_RANGES};
+use crate::persist;
 use crate::stocks::AssetCache;
+use crate::stream::{self, SubMsg, TickCache};
 use crate::terminal::TerminalState;
 use crate::theme;
+use crate::watchlist::WatchlistState;
 use crate::workers::{self, Msg};
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -153,6 +157,46 @@ pub struct ChartApp {
     /// fetches lazily (no point spending API calls on a tab the user hasn't
     /// visited).
     pub terminal_primed: bool,
+
+    /// Last `AppState` we serialized to disk. We diff against this at the end
+    /// of every frame to decide whether to save; cheap struct comparison.
+    pub last_saved_state: persist::AppState,
+    /// When did the live state first diverge from `last_saved_state`?
+    /// `None` ⇒ nothing to save. We flush once `elapsed >= SAVE_DEBOUNCE`,
+    /// matching the "1 second of quiescence after the last change" rule.
+    pub state_dirty_since: Option<std::time::Instant>,
+
+    /// Live tick stream — shared with the WS thread. Read-only from the UI:
+    /// `tick_cache.read().unwrap().get(symbol)` returns the latest known
+    /// last/bid/ask/bar for any subscribed symbol. Updates trigger a
+    /// `ctx.request_repaint()` from the WS thread so the UI wakes up.
+    pub tick_cache: TickCache,
+    /// Outbound channel to the WS thread — push the full desired subscribe
+    /// set whenever it changes. The thread diffs and emits the right
+    /// subscribe/unsubscribe frames.
+    pub stream_tx: std::sync::mpsc::Sender<SubMsg>,
+    /// Most recent subscription set we sent. Compared against the freshly
+    /// computed set each frame so we only push when something changes.
+    pub last_subscribed: std::collections::HashSet<String>,
+    /// Live connection state of the WS, reported by the stream thread via
+    /// `Msg::StreamStatus`. Surfaced in the top tab strip until the proper
+    /// status bar lands (Tier 3 / Step ?).
+    pub stream_connected: bool,
+
+    /// Pinned watchlist symbols + transient sidebar state (input/edit
+    /// mode). The symbol list is persisted via `snapshot_state`.
+    pub watchlist: WatchlistState,
+
+    /// Bloomberg-style command palette text. `/` focuses; Enter dispatches.
+    pub command_input: String,
+    /// Set on the frame `/` is pressed; the palette TextEdit calls
+    /// `response.request_focus()` and clears the flag.
+    pub command_focus_requested: bool,
+    /// If a parse failed or returned `Unknown`, surface a short error
+    /// underneath the palette. Cleared on the next successful dispatch.
+    pub command_error: Option<String>,
+    /// `?` / HELP toggles a help overlay.
+    pub command_help_open: bool,
 }
 
 impl ChartApp {
@@ -161,29 +205,328 @@ impl ChartApp {
         let (tx, rx) = mpsc::channel();
         let assets = Arc::new(AssetCache::new());
         workers::spawn_assets(client.clone(), tx.clone(), ctx.clone());
-        ChartApp {
-            client,
+
+        // Live data stream — one long-running thread handles auth +
+        // subscriptions + reconnects. Ticks land in the shared cache; only
+        // connection status flows through the Msg channel.
+        let tick_cache = stream::new_tick_cache();
+        let stream_tx = stream::spawn_stream(
+            client.clone(),
+            tx.clone(),
+            ctx.clone(),
+            tick_cache.clone(),
+        );
+
+        // Restore the saved state from disk (or fall back to defaults if no
+        // state.json exists yet / it's unreadable). Clamp the persisted
+        // indices so a state file from a future build that grew the RANGES /
+        // TFS arrays can't index out-of-bounds in older binaries.
+        let saved = persist::load();
+        let range_idx = saved.range_idx.min(chart::RANGES.len() - 1);
+        let tf_idx = saved.tf_idx.min(chart::TFS.len() - 1);
+        let mut indicators = Indicators::default();
+        indicators.ema = saved.indicators.ema;
+        indicators.sma = saved.indicators.sma;
+        indicators.bollinger = saved.indicators.bollinger;
+        indicators.vwap = saved.indicators.vwap;
+        indicators.volume = saved.indicators.volume;
+        indicators.rsi = saved.indicators.rsi;
+        indicators.macd = saved.indicators.macd;
+
+        let mut compare = CompareState::new();
+        compare.range_idx = saved.compare_range_idx.min(COMPARE_RANGES.len() - 1);
+        // Kick a background load for each persisted Compare slot — same code
+        // path as the user adding them by hand. The Compare tab will show
+        // "loading…" until each response lands.
+        for sym in &saved.compare_slots {
+            compare.add_symbol(sym.clone(), client.clone(), tx.clone(), ctx);
+        }
+
+        let mut app = ChartApp {
+            client: client.clone(),
             assets,
-            tx,
+            tx: tx.clone(),
             rx,
-            symbol_input: String::new(),
+            symbol_input: saved.last_symbol.clone(),
             current_symbol: String::new(),
-            range_idx: 4, // 1Y default
-            tf_idx: chart::RANGES[4].default_tf,
+            range_idx,
+            tf_idx,
             bars: Vec::new(),
             loading: false,
             err: String::new(),
             gen: 0,
-            indicators: Indicators::default(),
+            indicators,
             autocomplete: Vec::new(),
             autocomplete_open: false,
             zoom_x: true,
             zoom_y: false,
             strategy_enabled: false,
             current_tab: Tab::Terminal,
-            compare: CompareState::new(),
+            compare,
             terminal: TerminalState::new(),
             terminal_primed: false,
+            last_saved_state: saved.clone(),
+            state_dirty_since: None,
+            tick_cache,
+            stream_tx,
+            last_subscribed: std::collections::HashSet::new(),
+            stream_connected: false,
+            watchlist: WatchlistState::from_saved(&saved.watchlist),
+            command_input: String::new(),
+            command_focus_requested: false,
+            command_error: None,
+            command_help_open: false,
+        };
+
+        // If we restored a non-empty symbol, kick its bars load so the Chart
+        // tab is already populated when the user navigates to it.
+        if !saved.last_symbol.is_empty() {
+            app.kick_off_load(ctx);
+        }
+
+        app
+    }
+
+    /// Materialise the current persistable state. Cheap struct build — only
+    /// stores the *user-visible* surface (no bars, no loading flags, no
+    /// errors).
+    pub fn snapshot_state(&self) -> persist::AppState {
+        persist::AppState {
+            last_symbol: self.current_symbol.clone(),
+            range_idx: self.range_idx,
+            tf_idx: self.tf_idx,
+            indicators: persist::IndicatorPrefs {
+                ema: self.indicators.ema,
+                sma: self.indicators.sma,
+                bollinger: self.indicators.bollinger,
+                vwap: self.indicators.vwap,
+                volume: self.indicators.volume,
+                rsi: self.indicators.rsi,
+                macd: self.indicators.macd,
+            },
+            compare_slots: self.compare.slots.iter().map(|s| s.symbol.clone()).collect(),
+            compare_range_idx: self.compare.range_idx,
+            watchlist: self.watchlist.symbols.clone(),
+        }
+    }
+
+    /// Apply a parsed command. Mutates ChartApp / Compare / Terminal /
+    /// Watchlist as appropriate; sets `command_error` if the command was
+    /// `Unknown`. Kept separate from the parser so the parser stays pure
+    /// and testable.
+    fn dispatch_command(&mut self, c: Command, ctx: &egui::Context) {
+        self.command_error = None;
+        match c {
+            Command::Noop => {}
+            Command::Help => self.command_help_open = true,
+            Command::LoadSymbol(sym) => {
+                self.symbol_input = sym;
+                self.current_tab = Tab::Chart;
+                self.kick_off_load(ctx);
+            }
+            Command::Compare(syms) => {
+                // Replace all slots — fastest way to reset is remove then
+                // add. add_symbol uppercases and dedups internally.
+                while !self.compare.slots.is_empty() {
+                    self.compare.remove_slot(0);
+                }
+                for s in syms {
+                    self.compare.add_symbol(s, self.client.clone(), self.tx.clone(), ctx);
+                }
+                self.current_tab = Tab::Compare;
+            }
+            Command::GoTo(page) => {
+                self.current_tab = Tab::Terminal;
+                self.terminal.sub_tab = match page {
+                    Page::Positions => crate::terminal::SubTab::Positions,
+                    Page::TradeForm => crate::terminal::SubTab::Trade,
+                    Page::Orders => crate::terminal::SubTab::Orders,
+                    Page::Activity => crate::terminal::SubTab::Activity,
+                };
+            }
+            Command::Trade(intent) => {
+                self.current_tab = Tab::Terminal;
+                self.terminal.sub_tab = crate::terminal::SubTab::Trade;
+                if let Some(s) = intent.symbol {
+                    self.terminal.form.symbol_input = s.clone();
+                    self.terminal.pending_chart_load = Some(s);
+                }
+                if let Some(q) = intent.qty {
+                    self.terminal.form.qty_input = q;
+                }
+                if let Some(side) = intent.side {
+                    self.terminal.form.side = match side {
+                        CmdSide::Buy => crate::terminal::TradeSide::Buy,
+                        CmdSide::Sell => crate::terminal::TradeSide::Sell,
+                    };
+                    // BUY/SELL implies market — the user can flip to limit
+                    // manually once on the form.
+                    self.terminal.form.kind = crate::terminal::OrderKind::Market;
+                }
+            }
+            Command::AddToWatchlist(sym) => {
+                self.watchlist.add(&sym);
+            }
+            Command::Unknown(raw) => {
+                self.command_error = Some(format!("Unknown: {raw}"));
+            }
+        }
+    }
+
+    /// Render the Bloomberg-style command palette as a top-bottom panel
+    /// above the tab strip. `/` from anywhere outside a text field focuses
+    /// it; Enter dispatches; Esc clears + blurs.
+    fn render_command_palette(&mut self, ctx: &egui::Context) {
+        let palette_id = egui::Id::new("ccb_command_palette_input");
+
+        // Hotkey: '/' from any non-text-field context steals focus to the
+        // palette. We honor egui's "focused widget gets every key" rule by
+        // checking that the currently-focused widget (if any) isn't the
+        // palette itself.
+        let focused_id = ctx.memory(|m| m.focused());
+        if focused_id.map_or(true, |id| id == palette_id) || focused_id.is_none() {
+            // No field actively eating keystrokes.
+            if ctx.input(|i| i.key_pressed(Key::Slash)) {
+                self.command_focus_requested = true;
+            }
+        }
+
+        egui::TopBottomPanel::top("cmd_palette")
+            .resizable(false)
+            .exact_height(28.0)
+            .show(ctx, |ui| {
+                ui.horizontal_centered(|ui| {
+                    ui.label(
+                        RichText::new(" › ")
+                            .color(theme::ORANGE)
+                            .strong()
+                            .size(15.0),
+                    );
+                    let edit = egui::TextEdit::singleline(&mut self.command_input)
+                        .id(palette_id)
+                        .desired_width(ui.available_width() - 200.0)
+                        .hint_text("/ symbol · BUY 10 AAPL · COMP MSFT NVDA · PORT · HELP");
+                    let resp = ui.add(edit);
+
+                    if self.command_focus_requested {
+                        resp.request_focus();
+                        self.command_focus_requested = false;
+                    }
+                    if resp.has_focus() && ui.input(|i| i.key_pressed(Key::Escape)) {
+                        self.command_input.clear();
+                        self.command_error = None;
+                        resp.surrender_focus();
+                    }
+                    if resp.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)) {
+                        let raw = std::mem::take(&mut self.command_input);
+                        let parsed = cmd::parse(&raw);
+                        self.dispatch_command(parsed, ui.ctx());
+                    }
+
+                    ui.add_space(8.0);
+                    if let Some(err) = &self.command_error {
+                        ui.label(RichText::new(err).color(theme::RED).size(11.0));
+                    } else {
+                        ui.label(
+                            RichText::new("press / to focus  ·  ? for help")
+                                .color(theme::GRAY2)
+                                .size(11.0),
+                        );
+                    }
+                });
+            });
+
+        // Help overlay — toggled by HELP / ? and dismissed by Esc / X.
+        if self.command_help_open {
+            egui::Window::new("Command palette — help")
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                .collapsible(false)
+                .resizable(false)
+                .show(ctx, |ui| {
+                    let row = |ui: &mut egui::Ui, cmd: &str, desc: &str| {
+                        ui.horizontal(|ui| {
+                            ui.label(RichText::new(format!(" {cmd:<22} ")).color(theme::ORANGE).monospace());
+                            ui.label(RichText::new(desc).color(theme::WHITE));
+                        });
+                    };
+                    row(ui, "<TICKER>", "load on Chart, e.g.  AAPL");
+                    row(ui, "COMP <T1> <T2> ...", "replace Compare slots with these symbols");
+                    row(ui, "PORT", "jump to Trading Terminal / Positions");
+                    row(ui, "TRADE [<TICKER>]", "jump to Trade form, prefill symbol");
+                    row(ui, "BUY  <QTY> <TICKER>", "Trade form, MARKET buy");
+                    row(ui, "SELL <QTY> <TICKER>", "Trade form, MARKET sell");
+                    row(ui, "ORDERS", "Trading Terminal / Orders");
+                    row(ui, "ACT / ACTIVITY", "Trading Terminal / Activity");
+                    row(ui, "WATCH <TICKER>", "add to watchlist sidebar");
+                    row(ui, "HELP / ?", "show this overlay");
+                    ui.add_space(6.0);
+                    if ui.button(" CLOSE ").clicked()
+                        || ui.input(|i| i.key_pressed(Key::Escape))
+                    {
+                        self.command_help_open = false;
+                    }
+                });
+        }
+    }
+
+    /// Compute the union of symbols we currently want streaming: the chart's
+    /// active symbol, every Compare slot, every open position, and the
+    /// watchlist (Step 5 will populate it). Push to the WS thread *only*
+    /// when the set differs from what we last sent; the thread itself
+    /// further diffs and emits subscribe/unsubscribe frames so we don't
+    /// thrash the socket.
+    fn sync_stream_subscriptions(&mut self) {
+        let mut want: std::collections::HashSet<String> = std::collections::HashSet::new();
+        if !self.current_symbol.is_empty() {
+            want.insert(self.current_symbol.clone());
+        }
+        for s in &self.compare.slots {
+            if !s.symbol.is_empty() {
+                want.insert(s.symbol.clone());
+            }
+        }
+        for p in &self.terminal.positions {
+            if !p.symbol.is_empty() {
+                want.insert(p.symbol.clone());
+            }
+        }
+        for w in &self.watchlist.symbols {
+            if !w.is_empty() {
+                want.insert(w.clone());
+            }
+        }
+        if want != self.last_subscribed {
+            // Best-effort: if the WS thread has died we just drop the
+            // update; it'll re-fetch on its next connect from the
+            // `desired` set it holds across reconnects.
+            let _ = self.stream_tx.send(SubMsg::SetSubscriptions(want.clone()));
+            self.last_subscribed = want;
+        }
+    }
+
+    /// End-of-frame: if persistable state has drifted from what's on disk,
+    /// arm the debounce timer. Once a full second has passed without further
+    /// changes, flush to `state.json`. Errors are silently swallowed —
+    /// persistence is best-effort, not load-bearing for trading.
+    fn maybe_save_state(&mut self, ctx: &egui::Context) {
+        let current = self.snapshot_state();
+        if current != self.last_saved_state {
+            // Re-arm the debounce on every change so a rapid pill drag only
+            // triggers one save when the user pauses.
+            self.state_dirty_since = Some(std::time::Instant::now());
+            self.last_saved_state = current;
+        }
+        if let Some(t) = self.state_dirty_since {
+            let elapsed = t.elapsed();
+            if elapsed >= persist::SAVE_DEBOUNCE {
+                let _ = persist::save(&self.last_saved_state);
+                self.state_dirty_since = None;
+            } else {
+                // Wake up at the debounce deadline so the save fires even
+                // when the user has stopped interacting and egui would
+                // otherwise sit idle.
+                ctx.request_repaint_after(persist::SAVE_DEBOUNCE - elapsed);
+            }
         }
     }
 
@@ -324,6 +667,9 @@ impl ChartApp {
                         );
                     }
                 }
+                Msg::StreamStatus { connected, latency_ms: _ } => {
+                    self.stream_connected = connected;
+                }
                 Msg::TradeChartBars { symbol, gen, bars } => {
                     // Stale-response guard — drop responses whose gen lags
                     // the latest, or whose symbol no longer matches what's
@@ -400,6 +746,10 @@ impl EApp for ChartApp {
             }
         }
 
+        // Command palette goes ABOVE the tab strip — single bar across the
+        // top, matches the Bloomberg "function code bar" position.
+        self.render_command_palette(ctx);
+
         egui::TopBottomPanel::top("tab_strip").show(ctx, |ui| {
             self.render_tab_strip(ui);
         });
@@ -422,6 +772,48 @@ impl EApp for ChartApp {
             // Wake again in 1s so the auto-refresh fires close to schedule
             // even if the user isn't moving the mouse.
             ctx.request_repaint_after(std::time::Duration::from_secs(1));
+        }
+
+        // Watchlist sidebar — mounted across every tab so the user can
+        // glance at pinned tickers without context-switching. Click a row
+        // → load that symbol on the Chart tab. The bottom ticker tape is
+        // mounted below; together they form the persistent "what's
+        // moving" UI surface.
+        let mut load_from_sidebar: Option<String> = None;
+        if !self.watchlist.collapsed {
+            egui::SidePanel::left("watchlist_panel")
+                .resizable(false)
+                .min_width(crate::watchlist::sidebar_width())
+                .default_width(crate::watchlist::sidebar_width())
+                .show(ctx, |ui| {
+                    let outcome = crate::watchlist::render_sidebar(
+                        &mut self.watchlist,
+                        &self.tick_cache,
+                        &self.assets,
+                        self.client.clone(),
+                        self.tx.clone(),
+                        ui,
+                    );
+                    load_from_sidebar = outcome.load_symbol;
+                });
+        }
+
+        egui::TopBottomPanel::bottom("ticker_tape")
+            .resizable(false)
+            .exact_height(26.0)
+            .show(ctx, |ui| {
+                let _ = crate::watchlist::render_ticker_tape(
+                    &self.watchlist,
+                    &self.tick_cache,
+                    ui,
+                );
+            });
+
+        // Apply a click from the sidebar: jump to Chart and load the symbol.
+        if let Some(sym) = load_from_sidebar {
+            self.symbol_input = sym;
+            self.current_tab = Tab::Chart;
+            self.kick_off_load(ctx);
         }
 
         match self.current_tab {
@@ -451,11 +843,22 @@ impl EApp for ChartApp {
                         self.client.clone(),
                         self.tx.clone(),
                         &self.assets,
+                        &self.tick_cache,
                         ui,
                     );
                 });
             }
         }
+
+        // Push the latest desired stream subscriptions to the WS thread if
+        // anything changed (new chart symbol, new compare slot, new
+        // position, etc.). Cheap HashSet diff; only sends a channel msg
+        // when there's a real change.
+        self.sync_stream_subscriptions();
+
+        // Last thing each frame — diff the persistable surface against what's
+        // on disk and flush after the debounce. Cheap; struct compare only.
+        self.maybe_save_state(ctx);
     }
 }
 

@@ -40,7 +40,7 @@ pub struct Account {
     pub equity: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct OrderRequest {
     pub symbol: String,
     #[serde(skip_serializing_if = "String::is_empty")]
@@ -51,6 +51,34 @@ pub struct OrderRequest {
     pub time_in_force: String,
     #[serde(skip_serializing_if = "String::is_empty")]
     pub limit_price: String,
+    /// Required for `stop` and `stop_limit`; omitted otherwise. Alpaca
+    /// rejects the request if it appears on the wrong order_type.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stop_price: Option<String>,
+    /// For `trailing_stop` orders. We expose percent (easier risk UX); the
+    /// `trail_price` alternative is intentionally omitted.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub trail_percent: Option<String>,
+    /// Bracket / OTO / OCO. When `Some("bracket")`, both `take_profit` and
+    /// `stop_loss` must be set per Alpaca's spec.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub order_class: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub take_profit: Option<TakeProfit>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stop_loss: Option<StopLoss>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct TakeProfit {
+    pub limit_price: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct StopLoss {
+    pub stop_price: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub limit_price: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

@@ -64,7 +64,15 @@ async def fetch_bars(
         "adjustment": "split",
         "feed": feed,
     }
-    bars: list[Bar] = []
+    # Perf-fix: collect each page into its own list via a C-level comprehension
+    # and flatten once at the end. The previous code did one Python-level
+    # `bars.append(...)` per row across up to 50,000 rows, which compounded
+    # interpreter overhead with list reallocations. Chunked accumulation lets
+    # the underlying CPython list resize in larger steps and removes the
+    # per-row append/lookup cost.
+    pages: list[list[Bar]] = []
+    total = 0
+    cap = 50_000
     async with httpx.AsyncClient(timeout=15.0, headers=_headers(creds)) as client:
         while True:
             resp = await client.get(url, params=params)
@@ -76,14 +84,23 @@ async def fetch_bars(
                     pass
                 raise RuntimeError(f"alpaca bars {resp.status_code}: {msg}")
             payload = resp.json()
-            for b in payload.get("bars") or []:
-                bars.append(Bar(t=b["t"], o=b["o"], h=b["h"], l=b["l"], c=b["c"], v=b["v"]))
+            raw = payload.get("bars") or []
+            page = [
+                Bar(t=b["t"], o=b["o"], h=b["h"], l=b["l"], c=b["c"], v=b["v"])
+                for b in raw
+            ]
+            pages.append(page)
+            total += len(page)
             token = payload.get("next_page_token")
-            if not token:
+            if not token or total >= cap:
                 break
             params["page_token"] = token
-            if len(bars) >= 50_000:
-                break
+    # Single allocation sized exactly to the result.
+    bars: list[Bar] = []
+    if pages:
+        bars = pages[0] if len(pages) == 1 else [b for page in pages for b in page]
+        if len(bars) > cap:
+            bars = bars[:cap]
     return bars
 
 

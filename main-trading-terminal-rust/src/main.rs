@@ -4,13 +4,17 @@
 mod api;
 mod app;
 mod chart;
+mod command;
 mod compare;
 mod config;
 mod indicators;
+mod persist;
 mod stocks;
+mod stream;
 mod strategies;
 mod terminal;
 mod theme;
+mod watchlist;
 mod workers;
 
 use std::env;

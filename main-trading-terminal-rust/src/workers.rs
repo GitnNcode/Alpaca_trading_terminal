@@ -58,6 +58,14 @@ pub enum Msg {
         gen: u64,
         bars: anyhow::Result<Vec<Bar>>,
     },
+    /// Connection / latency state of the live data WebSocket. Tick data
+    /// itself does NOT travel through this channel — it lands directly in
+    /// the shared `TickCache` to avoid 1000 msgs/sec of `mpsc` pressure on
+    /// the main loop. This variant is just the connect/disconnect signal.
+    StreamStatus {
+        connected: bool,
+        latency_ms: Option<u32>,
+    },
 }
 
 pub fn spawn_assets(client: Arc<AlpacaClient>, tx: Sender<Msg>, ctx: egui::Context) {

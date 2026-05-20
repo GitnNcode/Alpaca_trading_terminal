@@ -17,10 +17,28 @@ use std::sync::Arc;
 
 use egui::{Color32, Key, RichText};
 
-use crate::api::{Account, Activity, AlpacaClient, Bar, Order, OrderRequest, Position};
+use crate::api::{Account, Activity, AlpacaClient, Bar, Order, OrderRequest, Position, StopLoss, TakeProfit};
 use crate::stocks::AssetCache;
+use crate::stream::TickCache;
 use crate::theme;
 use crate::workers::{self, Msg};
+
+/// One executed fill, projected onto the Chart tab as a marker. Sourced from
+/// the user's own activity feed + closed orders — *not* the strategy
+/// signals (which are theoretical buy/sell rules).
+#[derive(Debug, Clone)]
+pub struct Fill {
+    pub time: chrono::DateTime<chrono::Utc>,
+    pub price: f64,
+    pub qty: f64,
+    pub side: FillSide,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FillSide {
+    Buy,
+    Sell,
+}
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum SubTab {
@@ -40,6 +58,34 @@ pub enum TradeSide {
 pub enum OrderKind {
     Market,
     Limit,
+    Stop,
+    StopLimit,
+    TrailingStop,
+}
+
+impl OrderKind {
+    /// String the form needs to put on `order_type` for the Alpaca API.
+    fn api_str(self) -> &'static str {
+        match self {
+            OrderKind::Market => "market",
+            OrderKind::Limit => "limit",
+            OrderKind::Stop => "stop",
+            OrderKind::StopLimit => "stop_limit",
+            OrderKind::TrailingStop => "trailing_stop",
+        }
+    }
+    fn label(self) -> &'static str {
+        match self {
+            OrderKind::Market => "MARKET",
+            OrderKind::Limit => "LIMIT",
+            OrderKind::Stop => "STOP",
+            OrderKind::StopLimit => "STOP-LIMIT",
+            OrderKind::TrailingStop => "TRAIL",
+        }
+    }
+    fn needs_limit(self) -> bool { matches!(self, OrderKind::Limit | OrderKind::StopLimit) }
+    fn needs_stop(self) -> bool { matches!(self, OrderKind::Stop | OrderKind::StopLimit) }
+    fn needs_trail(self) -> bool { matches!(self, OrderKind::TrailingStop) }
 }
 
 /// Form state for the Trade sub-tab. Mirrors the Go terminal's `tradeForm`
@@ -50,6 +96,18 @@ pub struct TradeForm {
     pub symbol_input: String,
     pub qty_input: String,
     pub limit_input: String,
+    /// Stop price for `stop` / `stop_limit`. Ignored for other kinds.
+    pub stop_input: String,
+    /// Trail percent for `trailing_stop`. Ignored for other kinds.
+    pub trail_pct_input: String,
+    /// When true, this order will be sent as a `bracket` — Alpaca attaches
+    /// a take-profit limit AND a stop-loss to the parent. The TP/SL legs
+    /// must be on the OPPOSITE side from the parent and only fire after the
+    /// parent fills, so Alpaca enforces them server-side.
+    pub bracket: bool,
+    pub tp_input: String,        // bracket take-profit limit price
+    pub sl_stop_input: String,   // bracket stop-loss STOP price
+    pub sl_limit_input: String,  // optional bracket stop-loss LIMIT price
     /// Inline result message under the form. Color-coded green on success,
     /// red on error, gray for "submitting…".
     pub result: String,
@@ -68,6 +126,12 @@ impl Default for TradeForm {
             symbol_input: String::new(),
             qty_input: String::new(),
             limit_input: String::new(),
+            stop_input: String::new(),
+            trail_pct_input: String::new(),
+            bracket: false,
+            tp_input: String::new(),
+            sl_stop_input: String::new(),
+            sl_limit_input: String::new(),
             result: String::new(),
             result_color: theme::GRAY2,
             busy: false,
@@ -197,6 +261,59 @@ impl TerminalState {
         workers::spawn_load_trade_chart(client, tx, ctx.clone(), sym, self.trade_chart.gen);
     }
 
+    /// Build the user's fill list for a given symbol — preferred source is
+    /// the activity feed (precise transaction times); closed orders are a
+    /// fallback for cases where Alpaca emitted only the order summary, not
+    /// per-fill activity rows. De-duped by `order_id`. Returned in ascending
+    /// time order so the caller can render markers in chronological order.
+    pub fn fills_for_symbol(&self, symbol: &str) -> Vec<Fill> {
+        let sym = symbol.to_ascii_uppercase();
+        let mut out: Vec<Fill> = Vec::new();
+        let mut seen_order_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
+        for a in &self.activities {
+            if a.activity_type != "FILL" && a.activity_type != "PARTIAL_FILL" {
+                continue;
+            }
+            let sym_match = a.symbol.as_deref().map(|s| s.to_ascii_uppercase()) == Some(sym.clone());
+            if !sym_match {
+                continue;
+            }
+            let Some(time) = a.transaction_time else { continue; };
+            let Some(price) = a.price.as_ref().and_then(|s| s.parse::<f64>().ok()) else { continue; };
+            let qty = a.qty.as_ref().and_then(|s| s.parse::<f64>().ok()).unwrap_or(0.0);
+            let side = match a.side.as_deref() {
+                Some("buy") | Some("BUY") => FillSide::Buy,
+                Some("sell") | Some("SELL") => FillSide::Sell,
+                _ => continue,
+            };
+            if let Some(id) = &a.order_id {
+                seen_order_ids.insert(id.clone());
+            }
+            out.push(Fill { time, price, qty, side });
+        }
+        for o in &self.closed_orders {
+            if o.symbol.to_ascii_uppercase() != sym {
+                continue;
+            }
+            if o.status.to_lowercase() != "filled" {
+                continue;
+            }
+            if seen_order_ids.contains(&o.id) {
+                continue;
+            }
+            let Some(price) = o.filled_avg_price_str().parse::<f64>().ok() else { continue; };
+            let qty = o.filled_qty.parse::<f64>().unwrap_or(0.0);
+            let side = match o.side.as_str() {
+                "buy" => FillSide::Buy,
+                "sell" => FillSide::Sell,
+                _ => continue,
+            };
+            out.push(Fill { time: o.created_at, price, qty, side });
+        }
+        out.sort_by_key(|f| f.time);
+        out
+    }
+
     /// Kick off all background fetches relevant to the Terminal tab. Called
     /// when the tab is first opened, when the user presses R/F5, and from
     /// the 10s auto-refresh.
@@ -227,6 +344,7 @@ pub fn render(
     client: Arc<AlpacaClient>,
     tx: Sender<Msg>,
     assets: &AssetCache,
+    tick_cache: &TickCache,
     ui: &mut egui::Ui,
 ) {
     // Sub-tab strip — appears UNDER the main top-level tab strip in app.rs.
@@ -260,7 +378,7 @@ pub fn render(
 
     // Dispatch to the active sub-tab.
     match state.sub_tab {
-        SubTab::Positions => positions_view(state, ui),
+        SubTab::Positions => positions_view(state, tick_cache, ui),
         SubTab::Trade => trade_view(state, client.clone(), tx.clone(), assets, ui),
         SubTab::Orders => orders_view(state, ui),
         SubTab::Activity => activity_view(state, ui),
@@ -331,7 +449,7 @@ fn kv(ui: &mut egui::Ui, k: &str, v: &str, color: Color32) {
 //  POSITIONS sub-tab
 // ----------------------------------------------------------------------------
 
-fn positions_view(state: &mut TerminalState, ui: &mut egui::Ui) {
+fn positions_view(state: &mut TerminalState, tick_cache: &TickCache, ui: &mut egui::Ui) {
     ui.horizontal(|ui| {
         ui.label(RichText::new(" POSITIONS ").color(theme::ORANGE).strong());
         if state.positions_loading {
@@ -339,6 +457,20 @@ fn positions_view(state: &mut TerminalState, ui: &mut egui::Ui) {
         }
         if !state.positions_err.is_empty() {
             ui.label(RichText::new(format!("  ERROR: {}", state.positions_err)).color(theme::RED));
+        }
+        // Hint that the table is updating between the 10-second refreshes.
+        let any_live = tick_cache
+            .read()
+            .map(|c| state.positions.iter().any(|p| c.get(&p.symbol).and_then(|t| t.last_price).is_some()))
+            .unwrap_or(false);
+        if any_live {
+            ui.label(
+                RichText::new("  • LIVE ")
+                    .color(theme::BLACK)
+                    .background_color(theme::GREEN)
+                    .strong()
+                    .size(10.0),
+            );
         }
     });
     ui.add_space(2.0);
@@ -371,21 +503,50 @@ fn positions_view(state: &mut TerminalState, ui: &mut egui::Ui) {
 
                 // Snapshot before borrowing into the row closure below.
                 let positions = state.positions.clone();
+                // Take a single read-lock for the whole table — release at
+                // the end. Live ticks are written by the WS thread; reads
+                // are cheap and we don't want one lock per row.
+                let live_lock = tick_cache.read().ok();
                 for p in &positions {
-                    let pl = p.unrealized_pl.parse::<f64>().unwrap_or(0.0);
-                    let plpc = p.unrealized_plpc.parse::<f64>().unwrap_or(0.0);
+                    let qty = p.qty.parse::<f64>().unwrap_or(0.0);
+                    let avg = p.avg_entry_price.parse::<f64>().unwrap_or(0.0);
+                    // Prefer live last over the broker's snapshot. If the
+                    // stream hasn't emitted anything for this symbol yet,
+                    // fall back to whatever /v2/positions returned at the
+                    // last refresh.
+                    let live_last = live_lock
+                        .as_ref()
+                        .and_then(|c| c.get(&p.symbol))
+                        .and_then(|t| t.last_price);
+                    let cur = live_last
+                        .unwrap_or_else(|| p.current_price.parse::<f64>().unwrap_or(0.0));
+                    // Sign so shorts profit when price falls. side is "long"
+                    // or "short" per Alpaca; everything else is treated as
+                    // long for safety.
+                    let side_sign: f64 = if p.side == "short" { -1.0 } else { 1.0 };
+                    let mkt_value = cur * qty;
+                    let pl = (cur - avg) * qty * side_sign;
+                    let plpc = if avg.abs() > 0.0 {
+                        (cur - avg) / avg * side_sign
+                    } else {
+                        0.0
+                    };
                     let pl_color = if pl >= 0.0 { theme::GREEN } else { theme::RED };
                     let side_color = match p.side.as_str() {
                         "long" => theme::CYAN,
                         "short" => theme::RED,
                         _ => theme::WHITE,
                     };
+                    // Make the CURRENT cell visually distinct when it's
+                    // coming from the stream — orange tint vs the broker's
+                    // stale snapshot.
+                    let cur_color = if live_last.is_some() { theme::ORANGE } else { theme::WHITE };
                     ui.label(RichText::new(&p.symbol).color(theme::WHITE).strong());
                     ui.label(RichText::new(p.side.to_uppercase()).color(side_color));
                     ui.label(RichText::new(&p.qty).color(theme::WHITE));
-                    ui.label(RichText::new(fmt_money_str(&p.avg_entry_price)).color(theme::WHITE));
-                    ui.label(RichText::new(fmt_money_str(&p.current_price)).color(theme::WHITE));
-                    ui.label(RichText::new(fmt_money_str(&p.market_value)).color(theme::WHITE));
+                    ui.label(RichText::new(format!("{:>12.2}", avg)).color(theme::WHITE));
+                    ui.label(RichText::new(format!("{:>12.2}", cur)).color(cur_color));
+                    ui.label(RichText::new(format!("{:>12.2}", mkt_value)).color(theme::WHITE));
                     ui.label(RichText::new(fmt_signed_money(pl)).color(pl_color));
                     ui.label(RichText::new(fmt_pct(plpc)).color(pl_color));
                     ui.end_row();
@@ -446,8 +607,20 @@ fn trade_view(
 
         ui.label(RichText::new("TYPE").color(theme::ORANGE).strong());
         ui.horizontal(|ui| {
-            kind_pill(ui, "MARKET", &mut state.form.kind, OrderKind::Market);
-            kind_pill(ui, "LIMIT", &mut state.form.kind, OrderKind::Limit);
+            // ComboBox handles 5 kinds cleanly; pills would be cramped.
+            egui::ComboBox::from_id_source("trade_kind")
+                .selected_text(RichText::new(state.form.kind.label()).color(theme::WHITE))
+                .show_ui(ui, |ui| {
+                    for k in [
+                        OrderKind::Market,
+                        OrderKind::Limit,
+                        OrderKind::Stop,
+                        OrderKind::StopLimit,
+                        OrderKind::TrailingStop,
+                    ] {
+                        ui.selectable_value(&mut state.form.kind, k, k.label());
+                    }
+                });
         });
         ui.end_row();
 
@@ -514,23 +687,95 @@ fn trade_view(
         );
         ui.end_row();
 
-        ui.label(RichText::new("LIMIT PX").color(theme::ORANGE).strong());
-        let limit_enabled = state.form.kind == OrderKind::Limit;
-        ui.add_enabled(
-            limit_enabled,
-            egui::TextEdit::singleline(&mut state.form.limit_input)
-                .desired_width(120.0)
-                .hint_text(if limit_enabled { "e.g. 187.50" } else { "n/a for market" }),
-        );
-        ui.end_row();
+        // Conditional price fields — only render the rows that the current
+        // order kind actually uses, instead of greying out unused fields.
+        // Keeps the form short and obvious.
+        if state.form.kind.needs_limit() {
+            ui.label(RichText::new("LIMIT PX").color(theme::ORANGE).strong());
+            ui.add(
+                egui::TextEdit::singleline(&mut state.form.limit_input)
+                    .desired_width(120.0)
+                    .hint_text("e.g. 187.50"),
+            );
+            ui.end_row();
+        }
+        if state.form.kind.needs_stop() {
+            ui.label(RichText::new("STOP PX").color(theme::ORANGE).strong());
+            ui.add(
+                egui::TextEdit::singleline(&mut state.form.stop_input)
+                    .desired_width(120.0)
+                    .hint_text("trigger price"),
+            );
+            ui.end_row();
+        }
+        if state.form.kind.needs_trail() {
+            ui.label(RichText::new("TRAIL %").color(theme::ORANGE).strong());
+            ui.add(
+                egui::TextEdit::singleline(&mut state.form.trail_pct_input)
+                    .desired_width(120.0)
+                    .hint_text("e.g. 5  (= 5%)"),
+            );
+            ui.end_row();
+        }
     });
+
+    // Bracket toggle — when on, Alpaca attaches a take-profit and stop-loss
+    // leg server-side. The protective legs fire on the OPPOSITE side of the
+    // parent only after the parent fills.
+    ui.add_space(6.0);
+    ui.horizontal(|ui| {
+        ui.checkbox(&mut state.form.bracket, "Bracket (attach TP + SL)");
+        if state.form.bracket {
+            ui.label(
+                RichText::new(" both legs required ").color(theme::GRAY2).size(11.0),
+            );
+        }
+    });
+    if state.form.bracket {
+        egui::Grid::new("bracket_form").num_columns(2).spacing([8.0, 6.0]).show(ui, |ui| {
+            ui.label(RichText::new("TAKE PROFIT @").color(theme::GREEN).strong());
+            ui.add(
+                egui::TextEdit::singleline(&mut state.form.tp_input)
+                    .desired_width(120.0)
+                    .hint_text("limit price"),
+            );
+            ui.end_row();
+
+            ui.label(RichText::new("STOP LOSS @").color(theme::RED).strong());
+            ui.add(
+                egui::TextEdit::singleline(&mut state.form.sl_stop_input)
+                    .desired_width(120.0)
+                    .hint_text("stop trigger"),
+            );
+            ui.end_row();
+
+            ui.label(RichText::new("SL LIMIT (opt)").color(theme::GRAY2).strong());
+            ui.add(
+                egui::TextEdit::singleline(&mut state.form.sl_limit_input)
+                    .desired_width(120.0)
+                    .hint_text("blank = stop market"),
+            );
+            ui.end_row();
+        });
+    }
 
     ui.add_space(6.0);
     ui.horizontal(|ui| {
-        let can_submit = !state.form.busy
-            && !state.form.symbol_input.trim().is_empty()
-            && !state.form.qty_input.trim().is_empty()
-            && (state.form.kind == OrderKind::Market || !state.form.limit_input.trim().is_empty());
+        // Submit gating reflects the kind- and bracket-specific required
+        // fields. Centralized here so PLACE ORDER greys-out cleanly without
+        // having to call build_order on every keystroke.
+        let f = &state.form;
+        let mut can_submit = !f.busy
+            && !f.symbol_input.trim().is_empty()
+            && !f.qty_input.trim().is_empty();
+        if f.kind.needs_limit() && f.limit_input.trim().is_empty() { can_submit = false; }
+        if f.kind.needs_stop() && f.stop_input.trim().is_empty() { can_submit = false; }
+        if f.kind.needs_trail() && f.trail_pct_input.trim().is_empty() { can_submit = false; }
+        if f.bracket {
+            if f.tp_input.trim().is_empty() || f.sl_stop_input.trim().is_empty() {
+                can_submit = false;
+            }
+        }
 
         let place_btn = egui::Button::new(
             RichText::new(" PLACE ORDER ").color(theme::BLACK).strong(),
@@ -717,59 +962,110 @@ fn side_pill(
     }
 }
 
-fn kind_pill(ui: &mut egui::Ui, label: &str, cur: &mut OrderKind, val: OrderKind) {
-    let active = *cur == val;
-    let txt = format!(" {label} ");
-    let btn = if active {
-        egui::Button::new(RichText::new(txt).color(theme::BLACK).strong()).fill(theme::ORANGE)
-    } else {
-        egui::Button::new(RichText::new(txt).color(theme::GRAY2)).fill(theme::DARK)
-    };
-    if ui.add(btn).clicked() {
-        *cur = val;
-    }
-}
+// `kind_pill` was retired when the TYPE picker became a ComboBox — 5 kinds
+// (Market / Limit / Stop / StopLimit / TrailingStop) didn't fit cleanly as
+// pills, so we render via egui::ComboBox now. Keep this comment so the
+// pattern isn't reintroduced accidentally.
 
 /// Validate the form and produce an OrderRequest. Returns None if any
-/// required field is missing or non-numeric.
+/// required field is missing or non-numeric. Bracket orders require BOTH a
+/// take-profit limit and a stop-loss stop — partial brackets aren't valid
+/// per Alpaca's API.
 fn build_order(f: &TradeForm) -> Option<(OrderRequest, String)> {
     let sym = f.symbol_input.trim().to_uppercase();
     let qty = f.qty_input.trim();
     if sym.is_empty() || qty.is_empty() { return None; }
     qty.parse::<f64>().ok()?;
-    let (side, type_, limit_price) = (
-        match f.side { TradeSide::Buy => "buy", TradeSide::Sell => "sell" }.to_string(),
-        match f.kind { OrderKind::Market => "market", OrderKind::Limit => "limit" }.to_string(),
-        if f.kind == OrderKind::Limit {
-            let lp = f.limit_input.trim();
-            lp.parse::<f64>().ok()?;
-            lp.to_string()
-        } else {
-            String::new()
-        },
-    );
-    let summary = match f.kind {
-        OrderKind::Market => format!(
-            "{} {} {} @ MARKET (DAY)",
-            side.to_uppercase(),
-            qty,
-            sym
-        ),
-        OrderKind::Limit => format!(
-            "{} {} {} @ LIMIT {} (DAY)",
-            side.to_uppercase(),
-            qty,
-            sym,
-            limit_price
-        ),
+
+    let side = match f.side { TradeSide::Buy => "buy", TradeSide::Sell => "sell" }.to_string();
+    let order_type = f.kind.api_str().to_string();
+
+    // Per-kind validation + summary fragment construction.
+    let limit_price = if f.kind.needs_limit() {
+        let lp = f.limit_input.trim();
+        lp.parse::<f64>().ok()?;
+        lp.to_string()
+    } else {
+        String::new()
     };
+    let stop_price = if f.kind.needs_stop() {
+        let sp = f.stop_input.trim();
+        sp.parse::<f64>().ok()?;
+        Some(sp.to_string())
+    } else {
+        None
+    };
+    let trail_percent = if f.kind.needs_trail() {
+        let tp = f.trail_pct_input.trim();
+        tp.parse::<f64>().ok()?;
+        Some(tp.to_string())
+    } else {
+        None
+    };
+
+    // Bracket legs. Optional unless `bracket` toggled, in which case both
+    // TP-limit AND SL-stop are mandatory. SL-limit is optional even on a
+    // bracket (gives the user "stop" vs "stop_limit" for the protective leg).
+    let (order_class, take_profit, stop_loss) = if f.bracket {
+        let tp = f.tp_input.trim();
+        let sl_stop = f.sl_stop_input.trim();
+        tp.parse::<f64>().ok()?;
+        sl_stop.parse::<f64>().ok()?;
+        let sl_limit_opt = if !f.sl_limit_input.trim().is_empty() {
+            let sl = f.sl_limit_input.trim();
+            sl.parse::<f64>().ok()?;
+            Some(sl.to_string())
+        } else {
+            None
+        };
+        (
+            Some("bracket".to_string()),
+            Some(TakeProfit { limit_price: tp.to_string() }),
+            Some(StopLoss {
+                stop_price: sl_stop.to_string(),
+                limit_price: sl_limit_opt,
+            }),
+        )
+    } else {
+        (None, None, None)
+    };
+
+    // Human-readable summary for the confirm modal.
+    let mut summary = format!("{} {} {}", side.to_uppercase(), qty, sym);
+    summary.push_str(" @ ");
+    summary.push_str(f.kind.label());
+    if !limit_price.is_empty() {
+        summary.push_str(&format!(" {}", limit_price));
+    }
+    if let Some(sp) = &stop_price {
+        summary.push_str(&format!(" (stop {})", sp));
+    }
+    if let Some(tp) = &trail_percent {
+        summary.push_str(&format!(" ({}% trail)", tp));
+    }
+    if let Some(tp) = &take_profit {
+        summary.push_str(&format!(" + TP {}", tp.limit_price));
+    }
+    if let Some(sl) = &stop_loss {
+        match &sl.limit_price {
+            Some(l) => summary.push_str(&format!(" / SL {} → {}", sl.stop_price, l)),
+            None => summary.push_str(&format!(" / SL {}", sl.stop_price)),
+        }
+    }
+    summary.push_str(" (DAY)");
+
     let req = OrderRequest {
         symbol: sym,
         qty: qty.to_string(),
         side,
-        order_type: type_,
+        order_type,
         time_in_force: "day".to_string(),
         limit_price,
+        stop_price,
+        trail_percent,
+        order_class,
+        take_profit,
+        stop_loss,
     };
     Some((req, summary))
 }
@@ -1157,4 +1453,218 @@ fn status_color(s: &str) -> Color32 {
 
 fn short_id(s: &str) -> String {
     s.chars().take(8).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn base_form() -> TradeForm {
+        let mut f = TradeForm::default();
+        f.symbol_input = "AAPL".into();
+        f.qty_input = "10".into();
+        f
+    }
+
+    #[test]
+    fn market_order_serializes_with_no_optional_fields() {
+        let (req, sum) = build_order(&base_form()).unwrap();
+        assert_eq!(req.order_type, "market");
+        assert!(req.stop_price.is_none());
+        assert!(req.trail_percent.is_none());
+        assert!(req.order_class.is_none());
+        assert!(sum.contains("MARKET"));
+        let json = serde_json::to_string(&req).unwrap();
+        assert!(!json.contains("stop_price"));
+        assert!(!json.contains("order_class"));
+    }
+
+    #[test]
+    fn limit_order_requires_limit_price() {
+        let mut f = base_form();
+        f.kind = OrderKind::Limit;
+        assert!(build_order(&f).is_none()); // empty limit
+        f.limit_input = "187.5".into();
+        let (req, _) = build_order(&f).unwrap();
+        assert_eq!(req.order_type, "limit");
+        assert_eq!(req.limit_price, "187.5");
+    }
+
+    #[test]
+    fn stop_order_emits_stop_price() {
+        let mut f = base_form();
+        f.kind = OrderKind::Stop;
+        f.stop_input = "180.0".into();
+        let (req, _) = build_order(&f).unwrap();
+        assert_eq!(req.order_type, "stop");
+        assert_eq!(req.stop_price.as_deref(), Some("180.0"));
+        assert!(req.limit_price.is_empty());
+    }
+
+    #[test]
+    fn stop_limit_requires_both_prices() {
+        let mut f = base_form();
+        f.kind = OrderKind::StopLimit;
+        f.stop_input = "180".into();
+        // limit missing
+        assert!(build_order(&f).is_none());
+        f.limit_input = "179".into();
+        let (req, _) = build_order(&f).unwrap();
+        assert_eq!(req.order_type, "stop_limit");
+        assert_eq!(req.stop_price.as_deref(), Some("180"));
+        assert_eq!(req.limit_price, "179");
+    }
+
+    #[test]
+    fn trailing_stop_emits_trail_percent() {
+        let mut f = base_form();
+        f.kind = OrderKind::TrailingStop;
+        f.trail_pct_input = "5".into();
+        let (req, sum) = build_order(&f).unwrap();
+        assert_eq!(req.order_type, "trailing_stop");
+        assert_eq!(req.trail_percent.as_deref(), Some("5"));
+        assert!(sum.contains("trail"));
+    }
+
+    #[test]
+    fn bracket_requires_both_legs() {
+        let mut f = base_form();
+        f.bracket = true;
+        f.kind = OrderKind::Limit;
+        f.limit_input = "187".into();
+        // TP/SL empty -> reject
+        assert!(build_order(&f).is_none());
+        f.tp_input = "200".into();
+        assert!(build_order(&f).is_none()); // SL still missing
+        f.sl_stop_input = "175".into();
+        let (req, sum) = build_order(&f).unwrap();
+        assert_eq!(req.order_class.as_deref(), Some("bracket"));
+        assert_eq!(req.take_profit.as_ref().unwrap().limit_price, "200");
+        assert_eq!(req.stop_loss.as_ref().unwrap().stop_price, "175");
+        assert!(req.stop_loss.as_ref().unwrap().limit_price.is_none());
+        assert!(sum.contains("TP 200"));
+        assert!(sum.contains("SL 175"));
+    }
+
+    #[test]
+    fn bracket_with_sl_limit_serializes_both() {
+        let mut f = base_form();
+        f.bracket = true;
+        f.tp_input = "200".into();
+        f.sl_stop_input = "175".into();
+        f.sl_limit_input = "174".into();
+        let (req, _) = build_order(&f).unwrap();
+        let sl = req.stop_loss.as_ref().unwrap();
+        assert_eq!(sl.stop_price, "175");
+        assert_eq!(sl.limit_price.as_deref(), Some("174"));
+    }
+
+    fn make_activity(
+        kind: &str,
+        symbol: &str,
+        side: &str,
+        price: &str,
+        qty: &str,
+        order_id: &str,
+    ) -> crate::api::Activity {
+        crate::api::Activity {
+            id: format!("a-{order_id}"),
+            activity_type: kind.to_string(),
+            transaction_time: Some(chrono::Utc::now()),
+            date: None,
+            fill_type: Some("market".to_string()),
+            price: Some(price.to_string()),
+            qty: Some(qty.to_string()),
+            cum_qty: None,
+            side: Some(side.to_string()),
+            symbol: Some(symbol.to_string()),
+            order_id: Some(order_id.to_string()),
+            net_amount: None,
+            per_share_amount: None,
+            description: None,
+        }
+    }
+
+    fn make_closed_order(
+        id: &str,
+        symbol: &str,
+        side: &str,
+        status: &str,
+        avg: &str,
+        qty: &str,
+    ) -> crate::api::Order {
+        crate::api::Order {
+            id: id.to_string(),
+            symbol: symbol.to_string(),
+            side: side.to_string(),
+            order_type: "market".to_string(),
+            qty: qty.to_string(),
+            limit_price: None,
+            status: status.to_string(),
+            filled_qty: qty.to_string(),
+            filled_avg_price: Some(avg.to_string()),
+            created_at: chrono::Utc::now(),
+        }
+    }
+
+    #[test]
+    fn fills_for_symbol_pulls_from_activity_first() {
+        let mut state = TerminalState::new();
+        state.activities = vec![
+            make_activity("FILL", "AAPL", "buy", "150.0", "10", "ord-1"),
+            make_activity("FILL", "MSFT", "sell", "420.0", "5", "ord-2"),
+        ];
+        let aapl = state.fills_for_symbol("AAPL");
+        assert_eq!(aapl.len(), 1);
+        assert_eq!(aapl[0].price, 150.0);
+        assert_eq!(aapl[0].side, FillSide::Buy);
+        assert_eq!(state.fills_for_symbol("MSFT").len(), 1);
+        assert_eq!(state.fills_for_symbol("NVDA").len(), 0);
+    }
+
+    #[test]
+    fn fills_for_symbol_dedups_closed_orders_already_in_activity() {
+        let mut state = TerminalState::new();
+        state.activities = vec![make_activity(
+            "FILL", "AAPL", "buy", "150.0", "10", "shared-id",
+        )];
+        state.closed_orders = vec![make_closed_order(
+            "shared-id", "AAPL", "buy", "filled", "150.0", "10",
+        )];
+        // Only one row even though the same order appears in both feeds.
+        assert_eq!(state.fills_for_symbol("AAPL").len(), 1);
+    }
+
+    #[test]
+    fn fills_for_symbol_falls_back_to_closed_order_when_no_activity() {
+        let mut state = TerminalState::new();
+        state.closed_orders = vec![make_closed_order(
+            "only-here", "TSLA", "sell", "filled", "180.0", "3",
+        )];
+        let fills = state.fills_for_symbol("TSLA");
+        assert_eq!(fills.len(), 1);
+        assert_eq!(fills[0].side, FillSide::Sell);
+        assert_eq!(fills[0].price, 180.0);
+    }
+
+    #[test]
+    fn fills_ignores_canceled_or_rejected_closed_orders() {
+        let mut state = TerminalState::new();
+        state.closed_orders = vec![
+            make_closed_order("c1", "AAPL", "buy", "canceled", "0", "0"),
+            make_closed_order("r1", "AAPL", "buy", "rejected", "0", "0"),
+        ];
+        assert_eq!(state.fills_for_symbol("AAPL").len(), 0);
+    }
+
+    #[test]
+    fn non_numeric_inputs_are_rejected() {
+        let mut f = base_form();
+        f.qty_input = "abc".into();
+        assert!(build_order(&f).is_none());
+        let mut f = base_form();
+        f.kind = OrderKind::Stop;
+        f.stop_input = "abc".into();
+        assert!(build_order(&f).is_none());
+    }
 }

@@ -15,6 +15,10 @@ chrono = { version = "0.4", features = ["serde"] }
 dirs = "5"
 anyhow = "1"
 csv = "1.3"
+# Sync WebSocket client for the live data stream. native-tls keeps the build
+# simple on macOS/Windows (system TLS) — switch to rustls-tls-webpki-roots
+# if cross-compile to musl ever matters.
+tungstenite = { version = "0.24", features = ["native-tls"] }
 
 [profile.release]
 opt-level = "z"
