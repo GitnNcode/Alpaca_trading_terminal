@@ -15,15 +15,16 @@ pub struct AlpacaClient {
     pub agent: ureq::Agent,
 }
 
+// Only the wire fields we actually use are listed; serde drops the rest of
+// the /v2/positions payload (market_value / unrealized_pl / unrealized_plpc).
+// The positions table recomputes those live from the tick cache every frame,
+// so the broker-snapshot copies were unused.
 #[derive(Debug, Clone, Deserialize)]
 pub struct Position {
     pub symbol: String,
     pub qty: String,
     pub avg_entry_price: String,
     pub current_price: String,
-    pub market_value: String,
-    pub unrealized_pl: String,
-    pub unrealized_plpc: String,
     pub side: String,
 }
 

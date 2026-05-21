@@ -144,6 +144,12 @@ pub struct ChartApp {
     pub zoom_x: bool,
     pub zoom_y: bool,
 
+    // One-shot "fit chart to window" request. The toolbar HOME button sets
+    // this; `chart::render` propagates `.reset()` to every plot pane that
+    // frame and clears the flag. Using Cell keeps `chart::render`'s &-borrow
+    // (no signature churn) while letting it consume the flag.
+    pub home_requested: std::cell::Cell<bool>,
+
     // Strategy mode: when exactly one indicator is active AND this flag is
     // on, the chart shows Buy/Sell markers from that indicator's classic
     // trading strategy (see src/strategies.rs).
@@ -260,6 +266,7 @@ impl ChartApp {
             autocomplete_open: false,
             zoom_x: true,
             zoom_y: false,
+            home_requested: std::cell::Cell::new(false),
             strategy_enabled: false,
             current_tab: Tab::Terminal,
             compare,
@@ -339,7 +346,6 @@ impl ChartApp {
                 self.current_tab = Tab::Terminal;
                 self.terminal.sub_tab = match page {
                     Page::Positions => crate::terminal::SubTab::Positions,
-                    Page::TradeForm => crate::terminal::SubTab::Trade,
                     Page::Orders => crate::terminal::SubTab::Orders,
                     Page::Activity => crate::terminal::SubTab::Activity,
                 };
@@ -548,6 +554,14 @@ impl ChartApp {
                         Ok(b) => {
                             self.bars = b;
                             self.err.clear();
+                            // Auto-fit on every fresh load. Symbol switch,
+                            // range/TF change, sidebar click, command-bar
+                            // load — they all funnel through this Msg, so
+                            // wiring home here covers every entry point.
+                            // Re-uses the same one-shot Cell the toolbar
+                            // HOME button drives, so chart::render handles
+                            // it identically (Plot::reset on every pane).
+                            self.home_requested.set(true);
                         }
                         Err(e) => {
                             self.bars.clear();
@@ -1048,6 +1062,28 @@ impl ChartApp {
             };
             pill(ui, "X", &mut self.zoom_x, theme::CYAN);
             pill(ui, "Y", &mut self.zoom_y, theme::CYAN);
+
+            // HOME button — one-shot "fit to window". Sets a Cell flag that
+            // chart::render consumes this frame, calling Plot::reset() on
+            // every pane so egui_plot recomputes bounds from the data + the
+            // current pixel rect. That auto-fit is device/DPI-agnostic: it
+            // only ever uses the actual available pane size, so the chart
+            // re-centers correctly across window resizes, monitor swaps, or
+            // OS-level UI scaling. Greyed out while no bars are loaded —
+            // pressing it then would be a no-op.
+            let home_enabled = !self.bars.is_empty();
+            let home_btn = egui::Button::new(
+                RichText::new(" HOME ")
+                    .color(if home_enabled { theme::BLACK } else { theme::GRAY2 })
+                    .strong(),
+            )
+            .fill(if home_enabled { theme::ORANGE } else { theme::DARK });
+            let resp = ui
+                .add_enabled(home_enabled, home_btn)
+                .on_hover_text("Center + scale chart to fit the window");
+            if resp.clicked() {
+                self.home_requested.set(true);
+            }
 
             // The strategy toggle is only relevant when exactly one
             // strategy-capable indicator is selected. Render it as disabled

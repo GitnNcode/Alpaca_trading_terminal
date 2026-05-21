@@ -64,6 +64,9 @@ pub enum Msg {
     /// the main loop. This variant is just the connect/disconnect signal.
     StreamStatus {
         connected: bool,
+        // Reported by the stream thread for the planned status-bar telemetry
+        // (CLAUDE.md tier-3 status bar). Surfaced only when that lands.
+        #[allow(dead_code)]
         latency_ms: Option<u32>,
     },
 }

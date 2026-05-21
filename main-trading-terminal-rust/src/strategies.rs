@@ -28,6 +28,9 @@ pub enum SignalKind {
 #[derive(Clone, Debug)]
 pub struct Signal {
     pub bar_idx: usize,
+    // Stored for downstream consumers (tooltip / CSV export of generated
+    // signals); the chart-marker code positions off bar.low/.high directly.
+    #[allow(dead_code)]
     pub price: f64,
     pub kind: SignalKind,
 }

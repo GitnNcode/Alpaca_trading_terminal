@@ -89,7 +89,11 @@ pub fn new_tick_cache() -> TickCache {
 #[derive(Debug, Clone)]
 pub enum SubMsg {
     SetSubscriptions(HashSet<String>),
-    /// Graceful shutdown — the thread closes the socket and exits.
+    /// Graceful shutdown — the thread closes the socket and exits. Reserved
+    /// for the future "quit cleanly on app exit" path; nothing sends it yet,
+    /// so silence dead-code for the variant rather than removing the API
+    /// surface the stream loop already accepts.
+    #[allow(dead_code)]
     Shutdown,
 }
 

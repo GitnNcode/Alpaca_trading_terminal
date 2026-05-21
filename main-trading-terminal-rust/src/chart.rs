@@ -114,6 +114,17 @@ pub fn render(app: &ChartApp, ui: &mut egui::Ui) {
     // free-scaling the other. Same Vec2b is reused for every panel.
     let zoom = Vec2b::new(app.zoom_x, app.zoom_y);
 
+    // HOME-button consumption. We take-and-clear the Cell so the reset is
+    // strictly one-shot — egui_plot's `Plot::reset()` only needs to be
+    // applied on a single frame to clear stored bounds and re-fit to the
+    // data's bounding box against the actual pixel rect. That means the fit
+    // is correct on whatever device/window size we're rendering at right
+    // now: no hardcoded coordinates, no DPI assumptions. We apply it to
+    // every visible pane (price + the optional volume/RSI/MACD) because
+    // each Plot stores its own remembered bounds even though they share an
+    // axis_group; resetting only one would leave the others stuck.
+    let reset_view = app.home_requested.replace(false);
+
     // If strategy mode is on AND exactly one indicator is selected, compute
     // its Buy/Sell signal list now so we can render markers on the price
     // panel. Each strategy's rule lives in `strategies.rs`.
@@ -206,7 +217,7 @@ pub fn render(app: &ChartApp, ui: &mut egui::Ui) {
         None
     };
 
-    Plot::new("price")
+    let price_plot = Plot::new("price")
         .height(price_h)
         .legend(egui_plot::Legend::default().background_alpha(0.35))
         .link_axis(axis_group, true, false)
@@ -217,7 +228,9 @@ pub fn render(app: &ChartApp, ui: &mut egui::Ui) {
         .show_axes([true, true])
         .x_axis_label("")
         .show_x(false) // we'll show our own time tooltip
-        .label_formatter(make_label_formatter(bars))
+        .label_formatter(make_label_formatter(bars));
+    let price_plot = if reset_view { price_plot.reset() } else { price_plot };
+    price_plot
         .show(ui, |plot_ui| {
             plot_ui.box_plot(
                 BoxPlot::new(candles)
@@ -342,7 +355,7 @@ pub fn render(app: &ChartApp, ui: &mut egui::Ui) {
     if ind.volume {
         ui.add_space(2.0);
         let vol_bars = build_volume_bars(bars);
-        Plot::new("volume")
+        let vol_plot = Plot::new("volume")
             .height(vol_h)
             .legend(egui_plot::Legend::default().background_alpha(0.35))
             .link_axis(axis_group, true, false)
@@ -353,17 +366,18 @@ pub fn render(app: &ChartApp, ui: &mut egui::Ui) {
             .show_axes([false, true])
             .x_axis_label("")
             .show_x(false)
-            .show_y(true)
-            .show(ui, |plot_ui| {
-                plot_ui.bar_chart(BarChart::new(vol_bars).name("Volume"));
-            });
+            .show_y(true);
+        let vol_plot = if reset_view { vol_plot.reset() } else { vol_plot };
+        vol_plot.show(ui, |plot_ui| {
+            plot_ui.bar_chart(BarChart::new(vol_bars).name("Volume"));
+        });
     }
 
     // ── RSI panel ────────────────────────────────────────────────────────
     if ind.rsi {
         ui.add_space(2.0);
         let rsi = indicators::compute_rsi(bars, ind.rsi_period);
-        Plot::new("rsi")
+        let rsi_plot = Plot::new("rsi")
             .height(rsi_h)
             .legend(egui_plot::Legend::default().background_alpha(0.35))
             .link_axis(axis_group, true, false)
@@ -376,7 +390,9 @@ pub fn render(app: &ChartApp, ui: &mut egui::Ui) {
             .show_x(false)
             .include_y(0.0)
             .include_y(100.0)
-            .y_axis_formatter(rsi_axis_formatter())
+            .y_axis_formatter(rsi_axis_formatter());
+        let rsi_plot = if reset_view { rsi_plot.reset() } else { rsi_plot };
+        rsi_plot
             .show(ui, |plot_ui| {
                 // Neutral momentum zone (45..55), shaded behind everything
                 // else as a TradingView-style reference band. Drawn first so
@@ -452,7 +468,7 @@ pub fn render(app: &ChartApp, ui: &mut egui::Ui) {
             })
             .collect();
 
-        Plot::new("macd")
+        let macd_plot = Plot::new("macd")
             .height(macd_h)
             .legend(egui_plot::Legend::default().background_alpha(0.35))
             .link_axis(axis_group, true, false)
@@ -462,7 +478,9 @@ pub fn render(app: &ChartApp, ui: &mut egui::Ui) {
             .allow_zoom(zoom)
             .show_axes([false, true])
             .x_axis_label("")
-            .show_x(false)
+            .show_x(false);
+        let macd_plot = if reset_view { macd_plot.reset() } else { macd_plot };
+        macd_plot
             .show(ui, |plot_ui| {
                 plot_ui.hline(
                     HLine::new(0.0)

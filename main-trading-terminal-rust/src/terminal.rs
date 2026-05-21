@@ -30,6 +30,9 @@ use crate::workers::{self, Msg};
 pub struct Fill {
     pub time: chrono::DateTime<chrono::Utc>,
     pub price: f64,
+    // Recorded from the activity feed so the upcoming hover tooltip can show
+    // size; the diamond marker itself is positioned only by time + price.
+    #[allow(dead_code)]
     pub qty: f64,
     pub side: FillSide,
 }
@@ -608,7 +611,7 @@ fn trade_view(
         ui.label(RichText::new("TYPE").color(theme::ORANGE).strong());
         ui.horizontal(|ui| {
             // ComboBox handles 5 kinds cleanly; pills would be cramped.
-            egui::ComboBox::from_id_source("trade_kind")
+            egui::ComboBox::from_id_salt("trade_kind")
                 .selected_text(RichText::new(state.form.kind.label()).color(theme::WHITE))
                 .show_ui(ui, |ui| {
                     for k in [

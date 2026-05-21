@@ -35,7 +35,6 @@ pub enum Command {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Page {
     Positions,
-    TradeForm,
     Orders,
     Activity,
 }
