@@ -10,6 +10,9 @@ pub struct Credentials {
     pub base_url: String,
 }
 
+pub const PAPER_BASE_URL: &str = "https://paper-api.alpaca.markets";
+pub const LIVE_BASE_URL: &str = "https://api.alpaca.markets";
+
 pub fn config_path() -> Result<PathBuf> {
     let dir = dirs::config_dir().context("could not resolve OS config dir")?;
     Ok(dir.join("alpaca-tui").join("credentials.json"))

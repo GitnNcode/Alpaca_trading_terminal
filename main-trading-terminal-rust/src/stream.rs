@@ -86,15 +86,31 @@ pub fn new_tick_cache() -> TickCache {
 /// Messages from the UI to the stream thread. Currently just one kind —
 /// "this is the full set we want subscribed to right now." The thread
 /// diffs it against what's actually subscribed and emits the right frames.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub enum SubMsg {
     SetSubscriptions(HashSet<String>),
+    /// Swap in a fresh AlpacaClient (new api_key/api_secret) and force the
+    /// thread to drop the current socket so it reconnects + re-auths on the
+    /// next outer-loop iteration. Used by the "api change" command flow.
+    ReplaceClient(Arc<AlpacaClient>),
     /// Graceful shutdown — the thread closes the socket and exits. Reserved
     /// for the future "quit cleanly on app exit" path; nothing sends it yet,
     /// so silence dead-code for the variant rather than removing the API
     /// surface the stream loop already accepts.
     #[allow(dead_code)]
     Shutdown,
+}
+
+// Manual Debug — we redact the embedded AlpacaClient because its api_key /
+// api_secret would otherwise leak into any debug log of a SubMsg.
+impl std::fmt::Debug for SubMsg {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SubMsg::SetSubscriptions(s) => f.debug_tuple("SetSubscriptions").field(s).finish(),
+            SubMsg::ReplaceClient(_) => write!(f, "ReplaceClient(<redacted>)"),
+            SubMsg::Shutdown => write!(f, "Shutdown"),
+        }
+    }
 }
 
 /// Spawn the long-lived stream thread. Returns the inbound channel sender
@@ -115,7 +131,7 @@ pub fn spawn_stream(
 }
 
 fn run_loop(
-    client: Arc<AlpacaClient>,
+    mut client: Arc<AlpacaClient>,
     tx: Sender<Msg>,
     ctx: egui::Context,
     cache: TickCache,
@@ -131,12 +147,24 @@ fn run_loop(
         emit_status(&tx, &ctx, false, None);
         match connect_and_serve(&client, &tx, &ctx, &cache, &sub_rx, &mut desired) {
             Ok(ShutdownReason::Requested) => break,
+            Ok(ShutdownReason::ClientReplaced(new)) => {
+                // No backoff — the user just typed `api change` and is
+                // waiting to see the stream reconnect. Swap in the new
+                // creds and loop immediately.
+                client = new;
+                backoff = MIN_BACKOFF;
+                continue;
+            }
             Ok(ShutdownReason::Disconnected) | Err(_) => {
                 // Drain any subscription updates that arrived during the
                 // disconnected window so we re-subscribe with the latest.
                 while let Ok(msg) = sub_rx.try_recv() {
                     match msg {
                         SubMsg::SetSubscriptions(set) => desired = set,
+                        SubMsg::ReplaceClient(new) => {
+                            client = new;
+                            backoff = MIN_BACKOFF;
+                        }
                         SubMsg::Shutdown => return,
                     }
                 }
@@ -151,6 +179,10 @@ fn run_loop(
 enum ShutdownReason {
     Requested,
     Disconnected,
+    /// The UI sent a new AlpacaClient via `SubMsg::ReplaceClient`. The outer
+    /// `run_loop` swaps the local client and immediately reconnects (no
+    /// backoff) so the user sees the stream auth with the new key right away.
+    ClientReplaced(Arc<AlpacaClient>),
 }
 
 /// One full lifecycle of the socket: connect → auth → subscribe → read loop.
@@ -192,6 +224,12 @@ fn connect_and_serve(
                 Ok(SubMsg::SetSubscriptions(new_set)) => {
                     *desired = new_set;
                     sync_subscriptions(&mut socket, &mut subscribed, desired)?;
+                }
+                Ok(SubMsg::ReplaceClient(new_client)) => {
+                    // Drop the socket and bubble the new client up to
+                    // `run_loop` so the next connect uses the fresh creds.
+                    let _ = socket.close(None);
+                    return Ok(ShutdownReason::ClientReplaced(new_client));
                 }
                 Ok(SubMsg::Shutdown) => {
                     let _ = socket.close(None);

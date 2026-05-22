@@ -12,6 +12,7 @@ use crate::api::{AlpacaClient, Bar};
 use crate::chart;
 use crate::command::{self as cmd, Command, Page, Side as CmdSide};
 use crate::compare::{CompareState, COMPARE_RANGES};
+use crate::config;
 use crate::persist;
 use crate::stocks::AssetCache;
 use crate::stream::{self, SubMsg, TickCache};
@@ -19,6 +20,37 @@ use crate::terminal::TerminalState;
 use crate::theme;
 use crate::watchlist::WatchlistState;
 use crate::workers::{self, Msg};
+
+/// Build the multi-line tooltip shown when hovering the palette text-edit.
+/// Lists every function code with its description. Cheap to rebuild per
+/// frame; egui caches tooltip layout internally.
+fn palette_tooltip_text() -> String {
+    let mut out =
+        String::from("Command palette — function codes:\n\n");
+    for (cmd, desc) in PALETTE_FUNCS {
+        out.push_str(&format!("  {cmd:<22}  {desc}\n"));
+    }
+    out.push_str("\nTab accepts the first suggestion · Enter runs · Esc clears.");
+    out
+}
+
+/// Reference list of function codes for the palette tooltip + help overlay +
+/// autocomplete. Single source of truth — adding a new code here is enough
+/// to surface it in all three places. The first element is the typed prefix,
+/// the second is a human description.
+const PALETTE_FUNCS: &[(&str, &str)] = &[
+    ("<TICKER>",            "load on Chart, e.g.  AAPL"),
+    ("COMP <T1> <T2> ...",  "replace Compare slots with these symbols"),
+    ("PORT",                "Trading Terminal / Positions"),
+    ("TRADE [<TICKER>]",    "Trade form, prefill symbol"),
+    ("BUY  <QTY> <TICKER>", "Trade form, MARKET buy"),
+    ("SELL <QTY> <TICKER>", "Trade form, MARKET sell"),
+    ("ORDERS",              "Trading Terminal / Orders"),
+    ("ACT / ACTIVITY",      "Trading Terminal / Activity"),
+    ("WATCH <TICKER>",      "add to watchlist sidebar"),
+    ("API CHANGE",          "re-enter API key / secret / paper-or-live"),
+    ("HELP / ?",            "show this help overlay"),
+];
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum Tab {
@@ -201,8 +233,34 @@ pub struct ChartApp {
     /// If a parse failed or returned `Unknown`, surface a short error
     /// underneath the palette. Cleared on the next successful dispatch.
     pub command_error: Option<String>,
+    /// Transient confirmation banner displayed under the palette — used by
+    /// the `api change` flow to confirm "credentials saved" without popping
+    /// a modal that the user then has to dismiss.
+    pub command_status: Option<(String, egui::Color32)>,
     /// `?` / HELP toggles a help overlay.
     pub command_help_open: bool,
+    /// Per-frame autocomplete suggestions for the palette. Recomputed each
+    /// frame from `command_input` + AssetCache + `PALETTE_FUNCS`; cleared on
+    /// dispatch / Esc / chip click.
+    pub command_suggestions: Vec<String>,
+
+    // ---------------- Credentials modal ----------------
+    /// True whenever the credentials dialog is showing. Set by the
+    /// `Command::ApiChange` dispatch AND by `ChartApp::new` when the loaded
+    /// credentials are empty (first-launch path).
+    pub creds_modal_open: bool,
+    /// First-launch mode: the dialog can't be dismissed without saving, and
+    /// the rest of the UI is hidden behind a blocking overlay. Distinct from
+    /// the `api change` mid-session flow which renders as a normal Window.
+    pub creds_modal_first_run: bool,
+    pub creds_form_key: String,
+    pub creds_form_secret: String,
+    /// `true` ⇒ paper-trading endpoint, `false` ⇒ live (real money).
+    pub creds_form_paper: bool,
+    /// Inline validation error inside the modal (empty key/secret, etc.).
+    pub creds_form_error: Option<String>,
+    /// Toggles password-masking on the secret field.
+    pub creds_show_secret: bool,
 }
 
 impl ChartApp {
@@ -248,6 +306,19 @@ impl ChartApp {
             compare.add_symbol(sym.clone(), client.clone(), tx.clone(), ctx);
         }
 
+        // If the on-disk credentials are missing or empty, gate the UI on
+        // the first-run setup modal. `client.api_key` is empty in that case
+        // (main.rs falls back to Credentials::default()), so all background
+        // workers will fail until the user enters real keys — which is
+        // exactly why we don't show the rest of the UI yet.
+        let need_setup = client.api_key.trim().is_empty()
+            || client.api_secret.trim().is_empty();
+        // Default new-user mode = paper. If they're re-opening the modal
+        // mid-session via `api change`, we'll overwrite this from the
+        // current client's base_url before showing the form.
+        let form_paper =
+            client.base_url.is_empty() || client.base_url.contains("paper");
+
         let mut app = ChartApp {
             client: client.clone(),
             assets,
@@ -282,12 +353,23 @@ impl ChartApp {
             command_input: String::new(),
             command_focus_requested: false,
             command_error: None,
+            command_status: None,
             command_help_open: false,
+            command_suggestions: Vec::new(),
+            creds_modal_open: need_setup,
+            creds_modal_first_run: need_setup,
+            creds_form_key: client.api_key.clone(),
+            creds_form_secret: client.api_secret.clone(),
+            creds_form_paper: form_paper,
+            creds_form_error: None,
+            creds_show_secret: false,
         };
 
         // If we restored a non-empty symbol, kick its bars load so the Chart
-        // tab is already populated when the user navigates to it.
-        if !saved.last_symbol.is_empty() {
+        // tab is already populated when the user navigates to it. Skip
+        // entirely when we're in first-run setup — no point firing requests
+        // against an empty client; they'd error out and confuse the new user.
+        if !need_setup && !saved.last_symbol.is_empty() {
             app.kick_off_load(ctx);
         }
 
@@ -373,9 +455,236 @@ impl ChartApp {
             Command::AddToWatchlist(sym) => {
                 self.watchlist.add(&sym);
             }
+            Command::ApiChange => {
+                self.open_credentials_modal(false);
+            }
             Command::Unknown(raw) => {
                 self.command_error = Some(format!("Unknown: {raw}"));
             }
+        }
+    }
+
+    /// Open the credentials modal in either first-run mode (UI blocked
+    /// behind it) or mid-session mode (rendered as an egui::Window). The
+    /// form is pre-filled from the current client so the user only has to
+    /// edit what's actually changing — typically just flipping paper/live.
+    fn open_credentials_modal(&mut self, first_run: bool) {
+        self.creds_form_key = self.client.api_key.clone();
+        self.creds_form_secret = self.client.api_secret.clone();
+        self.creds_form_paper =
+            self.client.base_url.is_empty() || self.client.base_url.contains("paper");
+        self.creds_form_error = None;
+        self.creds_show_secret = false;
+        self.creds_modal_open = true;
+        self.creds_modal_first_run = first_run;
+    }
+
+    /// Apply the form: validate, write to disk, hot-swap the AlpacaClient,
+    /// reauth the stream, and reset everything the old client was holding
+    /// onto (positions / orders / asset cache / bars). Returns `true` on
+    /// success so the modal can close itself.
+    fn save_credentials_from_form(&mut self, ctx: &egui::Context) -> bool {
+        let key = self.creds_form_key.trim().to_string();
+        let secret = self.creds_form_secret.trim().to_string();
+        if key.is_empty() || secret.is_empty() {
+            self.creds_form_error = Some("API key and secret are both required.".into());
+            return false;
+        }
+        let base_url = if self.creds_form_paper {
+            config::PAPER_BASE_URL
+        } else {
+            config::LIVE_BASE_URL
+        }
+        .to_string();
+        let creds = config::Credentials { api_key: key, api_secret: secret, base_url };
+        if let Err(e) = config::save_credentials(&creds) {
+            self.creds_form_error = Some(format!("Could not save credentials: {e}"));
+            return false;
+        }
+
+        // Hot-swap the client. Anything in flight against the old client
+        // will land on the stale-response guards (gen counter for bars,
+        // symbol mismatch for everything else) and get discarded.
+        let new_client = Arc::new(AlpacaClient::new(creds));
+        self.client = new_client.clone();
+        // Tell the stream thread to drop the socket and reconnect with the
+        // new key. Best-effort — if the thread has died the next launch
+        // re-spawns cleanly.
+        let _ = self.stream_tx.send(SubMsg::ReplaceClient(new_client.clone()));
+        // Force a re-fetch of the asset universe (different account tiers
+        // see different asset sets) and reset everything the Terminal tab
+        // was holding so the next 10s tick repopulates from scratch.
+        workers::spawn_assets(new_client.clone(), self.tx.clone(), ctx.clone());
+        self.terminal = TerminalState::new();
+        self.terminal_primed = false;
+        // Bars from the old client are now meaningless — wipe and bump gen
+        // so any in-flight response is filtered out by drain_messages.
+        self.bars.clear();
+        self.current_symbol.clear();
+        self.gen = self.gen.wrapping_add(1);
+        // Clear the live tick cache; tickers will repopulate as the new WS
+        // stream sends events for the resubscribed symbols.
+        if let Ok(mut w) = self.tick_cache.write() {
+            w.clear();
+        }
+        self.last_subscribed.clear();
+
+        self.creds_modal_open = false;
+        self.creds_modal_first_run = false;
+        self.creds_form_error = None;
+        self.command_status = Some((
+            format!(
+                "API credentials updated ({}). Live stream reconnecting…",
+                if self.creds_form_paper { "PAPER" } else { "LIVE" }
+            ),
+            theme::GREEN,
+        ));
+        true
+    }
+
+    /// Mid-session credentials modal — renders as a normal egui::Window so
+    /// the underlying UI is still visible (just unusable for API actions
+    /// until the swap completes). Used by the `api change` command.
+    fn render_credentials_window(&mut self, ctx: &egui::Context) {
+        let mut open = self.creds_modal_open;
+        egui::Window::new("Change API credentials")
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .collapsible(false)
+            .resizable(false)
+            .open(&mut open)
+            .show(ctx, |ui| {
+                self.render_credentials_form(ui, false);
+            });
+        // The window's close (X) button toggles `open` off; reflect that
+        // back unless first-run is gating the UI.
+        if !open && !self.creds_modal_first_run {
+            self.creds_modal_open = false;
+        }
+    }
+
+    /// First-run credentials modal — takes over the entire viewport so the
+    /// user can't interact with anything else until they've entered keys.
+    /// The form itself is identical to the mid-session window; only the
+    /// chrome differs.
+    fn render_credentials_first_run(&mut self, ctx: &egui::Context) {
+        egui::CentralPanel::default().show(ctx, |ui| {
+            ui.vertical_centered(|ui| {
+                ui.add_space(40.0);
+                ui.label(
+                    RichText::new("ALPACA TRADING TERMINAL")
+                        .color(theme::ORANGE)
+                        .strong()
+                        .size(22.0),
+                );
+                ui.add_space(8.0);
+                ui.label(
+                    RichText::new("First-time setup — enter your Alpaca API credentials")
+                        .color(theme::GRAY2)
+                        .size(13.0),
+                );
+                ui.add_space(24.0);
+                ui.allocate_ui_with_layout(
+                    egui::vec2(500.0, 0.0),
+                    egui::Layout::top_down(egui::Align::LEFT),
+                    |ui| {
+                        self.render_credentials_form(ui, true);
+                    },
+                );
+            });
+        });
+    }
+
+    /// The form itself — shared between the first-run CentralPanel and the
+    /// mid-session Window. Hint text guides the user through key/secret
+    /// generation; the paper/live radio defaults to paper because that's
+    /// the safe choice.
+    fn render_credentials_form(&mut self, ui: &mut egui::Ui, first_run: bool) {
+        ui.label(
+            RichText::new("API Key").color(theme::ORANGE).strong(),
+        );
+        ui.add(
+            egui::TextEdit::singleline(&mut self.creds_form_key)
+                .desired_width(420.0)
+                .hint_text("PK… or AK… — from app.alpaca.markets → API Keys"),
+        );
+        ui.add_space(8.0);
+
+        ui.label(
+            RichText::new("API Secret").color(theme::ORANGE).strong(),
+        );
+        ui.horizontal(|ui| {
+            ui.add(
+                egui::TextEdit::singleline(&mut self.creds_form_secret)
+                    .desired_width(370.0)
+                    .password(!self.creds_show_secret)
+                    .hint_text("only shown once when you create the key"),
+            );
+            let label = if self.creds_show_secret { " hide " } else { " show " };
+            if ui.button(label).clicked() {
+                self.creds_show_secret = !self.creds_show_secret;
+            }
+        });
+        ui.add_space(8.0);
+
+        ui.label(
+            RichText::new("Environment").color(theme::ORANGE).strong(),
+        );
+        ui.horizontal(|ui| {
+            ui.radio_value(&mut self.creds_form_paper, true, " Paper  (simulated, no real money) ")
+                .on_hover_text("Recommended starting point. Trades route through paper-api.alpaca.markets.");
+            ui.radio_value(&mut self.creds_form_paper, false, " Live  (real orders) ")
+                .on_hover_text("Real money. Orders route through api.alpaca.markets.");
+        });
+        ui.add_space(12.0);
+
+        if let Some(err) = self.creds_form_error.clone() {
+            ui.label(RichText::new(err).color(theme::RED).size(12.0));
+            ui.add_space(4.0);
+        }
+
+        ui.horizontal(|ui| {
+            let save_label = if first_run { "  Save and continue  " } else { "  Save  " };
+            if ui
+                .add(
+                    egui::Button::new(
+                        RichText::new(save_label).color(theme::BLACK).strong(),
+                    )
+                    .fill(theme::ORANGE),
+                )
+                .clicked()
+            {
+                let ctx = ui.ctx().clone();
+                self.save_credentials_from_form(&ctx);
+            }
+            if !first_run {
+                if ui.button("  Cancel  ").clicked() {
+                    self.creds_modal_open = false;
+                    self.creds_form_error = None;
+                }
+            }
+        });
+
+        ui.add_space(12.0);
+        ui.label(
+            RichText::new(
+                "Get your keys: app.alpaca.markets → Home → API Keys → Generate New Key. \
+                 The secret is only shown once; copy it before closing that screen.",
+            )
+            .color(theme::GRAY)
+            .size(11.0),
+        );
+        ui.label(
+            RichText::new("Credentials are stored at:")
+                .color(theme::GRAY)
+                .size(11.0),
+        );
+        if let Ok(path) = config::config_path() {
+            ui.label(
+                RichText::new(format!("  {}", path.display()))
+                    .color(theme::GRAY2)
+                    .monospace()
+                    .size(11.0),
+            );
         }
     }
 
@@ -397,11 +706,16 @@ impl ChartApp {
             }
         }
 
+        // Build the tooltip string once per frame — it's stable across frames
+        // and showing it as a multi-line on_hover_text is cheaper than
+        // building a popup ourselves.
+        let tooltip = palette_tooltip_text();
+
         egui::TopBottomPanel::top("cmd_palette")
             .resizable(false)
-            .exact_height(28.0)
+            .min_height(28.0)
             .show(ctx, |ui| {
-                ui.horizontal_centered(|ui| {
+                ui.horizontal(|ui| {
                     ui.label(
                         RichText::new(" › ")
                             .color(theme::ORANGE)
@@ -410,21 +724,48 @@ impl ChartApp {
                     );
                     let edit = egui::TextEdit::singleline(&mut self.command_input)
                         .id(palette_id)
-                        .desired_width(ui.available_width() - 200.0)
-                        .hint_text("/ symbol · BUY 10 AAPL · COMP MSFT NVDA · PORT · HELP");
-                    let resp = ui.add(edit);
+                        .desired_width(ui.available_width() - 220.0)
+                        .hint_text(
+                            "/ symbol · BUY 10 AAPL · COMP MSFT NVDA · PORT · API CHANGE · HELP",
+                        );
+                    let resp = ui.add(edit).on_hover_text(&tooltip);
 
                     if self.command_focus_requested {
                         resp.request_focus();
                         self.command_focus_requested = false;
                     }
+                    if resp.changed() {
+                        // Re-derive suggestions every keystroke. Cheap —
+                        // AssetCache::filter does a partition_point lookup
+                        // and bounded scan, and PALETTE_FUNCS is 11 entries.
+                        self.refresh_command_suggestions();
+                        // Typing also clears any stale unknown-command error
+                        // / status banner so the user isn't reading leftover
+                        // feedback from the previous dispatch.
+                        self.command_error = None;
+                        self.command_status = None;
+                    }
                     if resp.has_focus() && ui.input(|i| i.key_pressed(Key::Escape)) {
                         self.command_input.clear();
+                        self.command_suggestions.clear();
                         self.command_error = None;
                         resp.surrender_focus();
                     }
+                    // Tab while focused accepts the first autocomplete
+                    // suggestion. egui normally uses Tab for focus
+                    // traversal — we consume it before that fires by
+                    // pressing-and-consuming via `key_pressed`.
+                    if resp.has_focus()
+                        && ui.input(|i| i.key_pressed(Key::Tab))
+                        && !self.command_suggestions.is_empty()
+                    {
+                        let first = self.command_suggestions[0].clone();
+                        self.command_input = first;
+                        self.refresh_command_suggestions();
+                    }
                     if resp.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)) {
                         let raw = std::mem::take(&mut self.command_input);
+                        self.command_suggestions.clear();
                         let parsed = cmd::parse(&raw);
                         self.dispatch_command(parsed, ui.ctx());
                     }
@@ -432,14 +773,46 @@ impl ChartApp {
                     ui.add_space(8.0);
                     if let Some(err) = &self.command_error {
                         ui.label(RichText::new(err).color(theme::RED).size(11.0));
+                    } else if let Some((msg, color)) = &self.command_status {
+                        ui.label(RichText::new(msg).color(*color).size(11.0));
                     } else {
                         ui.label(
-                            RichText::new("press / to focus  ·  ? for help")
+                            RichText::new("/ focus  ·  Tab autocomplete  ·  ? help")
                                 .color(theme::GRAY2)
                                 .size(11.0),
-                        );
+                        )
+                        .on_hover_text(&tooltip);
                     }
                 });
+
+                // Autocomplete suggestions chip strip — same pattern as the
+                // Chart toolbar's symbol-input autocomplete. Clicking a chip
+                // commits it into the input but does NOT dispatch; the user
+                // still presses Enter (matches the chart-toolbar behavior so
+                // muscle memory carries over).
+                if !self.command_suggestions.is_empty() {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.add_space(20.0);
+                        ui.label(RichText::new("↳").color(theme::GRAY2));
+                        let suggestions = self.command_suggestions.clone();
+                        for sug in suggestions.iter() {
+                            if ui
+                                .add(
+                                    egui::Button::new(
+                                        RichText::new(sug).color(theme::CYAN),
+                                    )
+                                    .fill(theme::DARK),
+                                )
+                                .on_hover_text("Click to fill, then press Enter to run")
+                                .clicked()
+                            {
+                                self.command_input = sug.clone();
+                                self.refresh_command_suggestions();
+                                self.command_focus_requested = true;
+                            }
+                        }
+                    });
+                }
             });
 
         // Help overlay — toggled by HELP / ? and dismissed by Esc / X.
@@ -449,22 +822,16 @@ impl ChartApp {
                 .collapsible(false)
                 .resizable(false)
                 .show(ctx, |ui| {
-                    let row = |ui: &mut egui::Ui, cmd: &str, desc: &str| {
+                    for (cmd, desc) in PALETTE_FUNCS {
                         ui.horizontal(|ui| {
-                            ui.label(RichText::new(format!(" {cmd:<22} ")).color(theme::ORANGE).monospace());
-                            ui.label(RichText::new(desc).color(theme::WHITE));
+                            ui.label(
+                                RichText::new(format!(" {cmd:<22} "))
+                                    .color(theme::ORANGE)
+                                    .monospace(),
+                            );
+                            ui.label(RichText::new(*desc).color(theme::WHITE));
                         });
-                    };
-                    row(ui, "<TICKER>", "load on Chart, e.g.  AAPL");
-                    row(ui, "COMP <T1> <T2> ...", "replace Compare slots with these symbols");
-                    row(ui, "PORT", "jump to Trading Terminal / Positions");
-                    row(ui, "TRADE [<TICKER>]", "jump to Trade form, prefill symbol");
-                    row(ui, "BUY  <QTY> <TICKER>", "Trade form, MARKET buy");
-                    row(ui, "SELL <QTY> <TICKER>", "Trade form, MARKET sell");
-                    row(ui, "ORDERS", "Trading Terminal / Orders");
-                    row(ui, "ACT / ACTIVITY", "Trading Terminal / Activity");
-                    row(ui, "WATCH <TICKER>", "add to watchlist sidebar");
-                    row(ui, "HELP / ?", "show this overlay");
+                    }
                     ui.add_space(6.0);
                     if ui.button(" CLOSE ").clicked()
                         || ui.input(|i| i.key_pressed(Key::Escape))
@@ -473,6 +840,100 @@ impl ChartApp {
                     }
                 });
         }
+    }
+
+    /// Recompute the palette autocomplete suggestions from the current
+    /// input. Kept on `ChartApp` (not the pure `command::parse`) because
+    /// suggestions depend on live state — the asset cache.
+    pub fn refresh_command_suggestions(&mut self) {
+        self.command_suggestions = self.compute_palette_suggestions();
+    }
+
+    fn compute_palette_suggestions(&self) -> Vec<String> {
+        let raw = &self.command_input;
+        if raw.trim().is_empty() {
+            return Vec::new();
+        }
+        let upper = raw.to_ascii_uppercase();
+        let tokens: Vec<&str> = upper.split_whitespace().collect();
+        let trailing_ws = raw
+            .chars()
+            .next_back()
+            .map(|c| c.is_whitespace())
+            .unwrap_or(false);
+
+        let mut out: Vec<String> = Vec::with_capacity(8);
+
+        // Single-token (no trailing space) ⇒ suggest top-level codes that
+        // start with this prefix, plus tickers that start with this prefix.
+        if tokens.len() == 1 && !trailing_ws {
+            let prefix = tokens[0];
+            const CODES: &[&str] = &[
+                "BUY ",
+                "SELL ",
+                "COMP ",
+                "TRADE ",
+                "WATCH ",
+                "PORT",
+                "ORDERS",
+                "ACT",
+                "ACTIVITY",
+                "HELP",
+                "API CHANGE",
+            ];
+            for c in CODES {
+                if c.starts_with(prefix) && *c != prefix {
+                    out.push((*c).to_string());
+                }
+            }
+            for (sym, _) in self.assets.filter(prefix, 6) {
+                out.push(sym);
+            }
+        } else {
+            // Multi-token (or single-token + trailing space) ⇒ argument
+            // completion based on the head function code.
+            let head = tokens[0];
+            let last = if trailing_ws { "" } else { tokens.last().copied().unwrap_or("") };
+            // Reconstruct the "everything except the last token" prefix so
+            // we can splice the chosen suggestion back in.
+            let prefix_str: String = if trailing_ws {
+                let mut s = tokens.join(" ");
+                s.push(' ');
+                s
+            } else {
+                let head_tokens = &tokens[..tokens.len() - 1];
+                let mut s = head_tokens.join(" ");
+                s.push(' ');
+                s
+            };
+            match head {
+                "BUY" | "SELL" => {
+                    // Expected: <head> <qty> <ticker>. The ticker slot is
+                    // either tokens[2] OR (if trailing space after qty)
+                    // a fresh token to come.
+                    let on_ticker = (tokens.len() >= 3 && !trailing_ws)
+                        || (tokens.len() == 2 && trailing_ws);
+                    if on_ticker {
+                        for (sym, _) in self.assets.filter(last, 6) {
+                            out.push(format!("{prefix_str}{sym}"));
+                        }
+                    }
+                }
+                "COMP" | "COMPARE" | "TRADE" | "WATCH" => {
+                    for (sym, _) in self.assets.filter(last, 6) {
+                        out.push(format!("{prefix_str}{sym}"));
+                    }
+                }
+                "API" => {
+                    if "CHANGE".starts_with(last) && "CHANGE" != last {
+                        out.push("API CHANGE".to_string());
+                    }
+                }
+                _ => {}
+            }
+        }
+        out.truncate(8);
+        out
     }
 
     /// Compute the union of symbols we currently want streaming: the chart's
@@ -739,6 +1200,23 @@ impl ChartApp {
 impl EApp for ChartApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.drain_messages(ctx);
+
+        // First-run setup gate: when no credentials are configured we
+        // commandeer the whole viewport with a setup screen. Nothing else
+        // renders this frame — including the palette and tab strip — so the
+        // user can't trigger background requests that would fail with auth
+        // errors. This is the in-GUI replacement for the old stdin prompt.
+        if self.creds_modal_first_run {
+            self.render_credentials_first_run(ctx);
+            return;
+        }
+
+        // Mid-session credentials modal (`api change`) — renders as a normal
+        // Window above whatever tab is active, so the user can still see the
+        // context they were in.
+        if self.creds_modal_open {
+            self.render_credentials_window(ctx);
+        }
 
         let focused = ctx.memory(|m| m.focused().is_some());
         let pressed = |k: Key| ctx.input(|i| i.key_pressed(k));

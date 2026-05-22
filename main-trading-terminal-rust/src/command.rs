@@ -15,6 +15,7 @@
 //   ORDERS                    → Trading Terminal / Orders
 //   ACT / ACTIVITY            → Trading Terminal / Activity
 //   WATCH <TICKER>            → add to watchlist
+//   API CHANGE / API          → open the credentials modal to re-enter keys
 //   HELP / ?                  → show the help overlay
 //
 // Anything else parses to `Command::Unknown(input)` so the renderer can
@@ -27,6 +28,10 @@ pub enum Command {
     GoTo(Page),
     Trade(TradeIntent),
     AddToWatchlist(String),
+    /// Pop the credentials modal so the user can re-enter API key/secret +
+    /// flip between paper and live. Mutation lives in `dispatch_command`;
+    /// this variant is just the dispatch token.
+    ApiChange,
     Help,
     Noop,
     Unknown(String),
@@ -119,6 +124,16 @@ pub fn parse(input: &str) -> Command {
             let sym = tokens.first().map(|t| t.to_ascii_uppercase());
             match sym {
                 Some(s) if is_tickerish(&s) => Command::AddToWatchlist(s),
+                _ => Command::Unknown(input.to_string()),
+            }
+        }
+        "API" => {
+            // "API" alone or "API CHANGE" both pop the credentials modal.
+            // Any other follow-up token is treated as a typo so the user
+            // sees a clear error instead of accidentally opening the modal.
+            match tokens.first().map(|t| t.to_ascii_uppercase()).as_deref() {
+                None => Command::ApiChange,
+                Some("CHANGE") if tokens.len() == 1 => Command::ApiChange,
                 _ => Command::Unknown(input.to_string()),
             }
         }
@@ -232,6 +247,21 @@ mod tests {
     #[test]
     fn watch_adds_to_watchlist() {
         assert_eq!(parse("watch tsla"), Command::AddToWatchlist("TSLA".into()));
+    }
+
+    #[test]
+    fn api_change_opens_creds_modal() {
+        assert_eq!(parse("api"), Command::ApiChange);
+        assert_eq!(parse("API"), Command::ApiChange);
+        assert_eq!(parse("api change"), Command::ApiChange);
+        assert_eq!(parse("API CHANGE"), Command::ApiChange);
+        assert_eq!(parse("  Api   Change  "), Command::ApiChange);
+    }
+
+    #[test]
+    fn api_with_garbage_arg_is_unknown() {
+        assert_eq!(parse("api foo"), Command::Unknown("api foo".into()));
+        assert_eq!(parse("api change extra"), Command::Unknown("api change extra".into()));
     }
 
     #[test]
