@@ -392,17 +392,21 @@ pub fn render(app: &ChartApp, ui: &mut egui::Ui) {
             .include_y(100.0)
             .y_axis_formatter(rsi_axis_formatter());
         let rsi_plot = if reset_view { rsi_plot.reset() } else { rsi_plot };
+        let nbars = bars.len();
         rsi_plot
             .show(ui, |plot_ui| {
                 // Neutral momentum zone (45..55), shaded behind everything
-                // else as a TradingView-style reference band. Drawn first so
-                // the RSI line + reference lines paint on top.
+                // else as a TradingView-style reference band. Bounded to the
+                // local bar range so it never feeds extreme X into the
+                // linked axis group.
+                let x_lo = -0.5;
+                let x_hi = (nbars as f64) - 0.5;
                 plot_ui.polygon(
                     Polygon::new(PlotPoints::new(vec![
-                        [-1.0e9, 45.0],
-                        [1.0e9, 45.0],
-                        [1.0e9, 55.0],
-                        [-1.0e9, 55.0],
+                        [x_lo, 45.0],
+                        [x_hi, 45.0],
+                        [x_hi, 55.0],
+                        [x_lo, 55.0],
                     ]))
                     .fill_color(Color32::from_rgba_unmultiplied(180, 180, 180, 18))
                     .stroke(Stroke::NONE)
@@ -581,9 +585,10 @@ fn make_label_formatter(
 fn rsi_axis_formatter() -> impl Fn(GridMark, &std::ops::RangeInclusive<f64>) -> String {
     move |mark, _| {
         let v = mark.value;
-        if (v - 30.0).abs() < 0.01 || (v - 50.0).abs() < 0.01 || (v - 70.0).abs() < 0.01 {
-            format!("{:.0}", v)
-        } else if v == 0.0 || v == 100.0 {
+        // Label every grid mark inside [0, 100]. egui_plot picks the
+        // step (typically 20 or 25 for a 0..100 range), so we just print
+        // each tick — the reference HLines at 30/50/70 mark the bands.
+        if (0.0..=100.0).contains(&v) {
             format!("{:.0}", v)
         } else {
             String::new()
