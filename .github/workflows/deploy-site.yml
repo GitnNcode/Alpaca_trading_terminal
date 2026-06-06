@@ -1,0 +1,111 @@
+name: Build Linux binary & deploy download site
+
+# Two jobs:
+#   1. build-linux — compile the Rust egui app on a real Ubuntu runner (a GUI
+#      app can't be cross-compiled cleanly from macOS/Windows), drop the binary
+#      into binaries/, commit it back to the repo, and hand it to the deploy job
+#      as an artifact.
+#   2. deploy — stage website/ + binaries/ into _site (preserving the site's
+#      ../binaries relative links) and publish to GitHub Pages. The site ends up
+#      at  https://<owner>.github.io/<repo>/website/
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'website/**'
+      - 'binaries/**'
+      - 'main-trading-terminal-rust/src/**'
+      - 'main-trading-terminal-rust/Cargo.toml'
+      - 'main-trading-terminal-rust/Cargo.lock'
+      - '.github/workflows/deploy-site.yml'
+  workflow_dispatch:   # lets you run it by hand from the Actions tab
+
+permissions:
+  contents: write   # commit the rebuilt Linux binary back into binaries/
+  pages: write      # publish to Pages
+  id-token: write   # OIDC token for actions/deploy-pages
+
+concurrency:
+  group: deploy-site
+  cancel-in-progress: false   # never cancel an in-flight Pages deploy
+
+jobs:
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install egui / eframe system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
+            libxkbcommon-dev libssl-dev libgl1-mesa-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: main-trading-terminal-rust
+
+      - name: Build release binary
+        working-directory: main-trading-terminal-rust
+        run: cargo build --release
+
+      - name: Stage binary into binaries/
+        run: |
+          mkdir -p binaries/main-trading-terminal-rust
+          cp main-trading-terminal-rust/target/release/alpaca-egui \
+             binaries/main-trading-terminal-rust/Alpaca_Trading_Terminal_Rust_LINUX
+          chmod +x binaries/main-trading-terminal-rust/Alpaca_Trading_Terminal_Rust_LINUX
+
+      - name: Upload binary for the deploy job
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-binary
+          path: binaries/main-trading-terminal-rust/Alpaca_Trading_Terminal_Rust_LINUX
+          if-no-files-found: error
+
+      - name: Commit the binary back into the repo (only if it changed)
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add binaries/main-trading-terminal-rust/Alpaca_Trading_Terminal_Rust_LINUX
+          if git diff --cached --quiet; then
+            echo "Linux binary unchanged — nothing to commit."
+          else
+            git commit -m "ci: rebuild Linux binary for Rust app"
+            git pull --rebase --autostash origin "${GITHUB_REF_NAME}" || true
+            git push origin "HEAD:${GITHUB_REF_NAME}" \
+              || echo "::warning::push failed (non-fatal) — binary is still in this deploy + the artifact"
+          fi
+
+  deploy:
+    needs: build-linux
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # Inject the binary built moments ago so the deployed site is never stale,
+      # regardless of whether the commit-back above raced with another push.
+      - name: Pull the freshly built Linux binary
+        uses: actions/download-artifact@v4
+        with:
+          name: linux-binary
+          path: binaries/main-trading-terminal-rust
+
+      - name: Stage _site (keeps the site's ../binaries links valid)
+        run: |
+          mkdir -p _site/website _site/binaries
+          cp -R website/.  _site/website/
+          cp -R binaries/. _site/binaries/
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+      - id: deploy
+        uses: actions/deploy-pages@v4

@@ -1,0 +1,607 @@
+<!DOCTYPE html>
+<html lang="en" class="scroll-smooth">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Alpaca Trading Terminal — native desktop terminal for Alpaca Markets</title>
+  <meta name="description"
+        content="A native desktop trading terminal for Alpaca Markets. Live charts, multi-asset risk/return compare, and full order management in one fast Rust + egui app. Free download for macOS and Windows." />
+
+  <!-- Open Graph / social preview -->
+  <meta property="og:title" content="Alpaca Trading Terminal" />
+  <meta property="og:description" content="Native desktop terminal for Alpaca Markets — charts, compare, and order management. Built in Rust." />
+  <meta property="og:type" content="website" />
+  <meta property="og:image" content="assets/logo.png" />
+
+  <link rel="icon" type="image/png" href="assets/logo.png" />
+
+  <!-- Mark the document as JS-enabled BEFORE paint so reveal animations only
+       hide content when JS can later reveal it (no-JS users see everything). -->
+  <script>document.documentElement.classList.add('js');</script>
+
+  <!-- Fonts: Inter (UI) + JetBrains Mono (terminal/data feel) -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap"
+        rel="stylesheet" />
+
+  <!-- Tailwind via Play CDN — the only no-build way to use Tailwind on a
+       static GitHub Pages site. No framework, no bundler. -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    // Brand palette lifted straight from the app's theme.rs (Bloomberg look).
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            ink:    '#000000',
+            coal:   '#0a0a0a',
+            panel:  '#0d0d0d',
+            panel2: '#141414',
+            line:   '#242424',
+            orange: '#ff6600',
+            cyan:   '#00bfff',
+            up:     '#00ff41',
+            down:   '#ff3131',
+            gold:   '#ffd700',
+            mute:   '#888888',
+            mute2:  '#555555',
+          },
+          fontFamily: {
+            sans: ['Inter', 'system-ui', 'sans-serif'],
+            mono: ['"JetBrains Mono"', 'ui-monospace', 'SFMono-Regular', 'Menlo', 'monospace'],
+          },
+        },
+      },
+    };
+  </script>
+
+  <link rel="stylesheet" href="styles.css" />
+</head>
+
+<body class="bg-ink text-white font-sans antialiased selection:bg-orange/30 selection:text-white">
+
+  <a href="#main" class="skip-link">Skip to content</a>
+
+  <!-- ───────────────────────── Decorative ticker tape ─────────────────────────
+       Echoes the app's real ticker-tape feature. Purely illustrative — these are
+       sample symbols, not live quotes. -->
+  <div class="ticker-wrap border-b border-line bg-coal text-[11px] font-mono text-mute" aria-hidden="true">
+    <div class="ticker-track">
+      <span class="tk">AAPL <i class="text-up">▲ 0.98%</i></span>
+      <span class="tk">MSFT <i class="text-up">▲ 0.42%</i></span>
+      <span class="tk">TSLA <i class="text-down">▼ 1.31%</i></span>
+      <span class="tk">NVDA <i class="text-up">▲ 2.04%</i></span>
+      <span class="tk">SPY <i class="text-up">▲ 0.21%</i></span>
+      <span class="tk">AMD <i class="text-down">▼ 0.55%</i></span>
+      <span class="tk">META <i class="text-up">▲ 1.12%</i></span>
+      <span class="tk">GOOGL <i class="text-up">▲ 0.33%</i></span>
+      <!-- duplicate set for a seamless loop -->
+      <span class="tk">AAPL <i class="text-up">▲ 0.98%</i></span>
+      <span class="tk">MSFT <i class="text-up">▲ 0.42%</i></span>
+      <span class="tk">TSLA <i class="text-down">▼ 1.31%</i></span>
+      <span class="tk">NVDA <i class="text-up">▲ 2.04%</i></span>
+      <span class="tk">SPY <i class="text-up">▲ 0.21%</i></span>
+      <span class="tk">AMD <i class="text-down">▼ 0.55%</i></span>
+      <span class="tk">META <i class="text-up">▲ 1.12%</i></span>
+      <span class="tk">GOOGL <i class="text-up">▲ 0.33%</i></span>
+    </div>
+  </div>
+
+  <!-- ───────────────────────────── Sticky nav ───────────────────────────── -->
+  <header class="sticky top-0 z-50 border-b border-line bg-ink/80 backdrop-blur supports-[backdrop-filter]:bg-ink/60">
+    <nav class="mx-auto flex max-w-6xl items-center justify-between gap-4 px-5 py-3">
+      <a href="#main" class="flex items-center gap-2.5">
+        <img src="assets/logo.png" alt="" class="h-8 w-8 rounded-md ring-1 ring-line" />
+        <span class="font-mono text-sm font-bold tracking-tight">
+          ALPACA<span class="text-orange">::</span>TERMINAL
+        </span>
+      </a>
+      <div class="hidden items-center gap-7 text-sm text-mute md:flex">
+        <a href="#features" class="transition hover:text-white">Features</a>
+        <a href="#download" class="transition hover:text-white">Download</a>
+        <a href="#install" class="transition hover:text-white">Install</a>
+        <a href="#source" class="transition hover:text-white">Source</a>
+      </div>
+      <a href="#download"
+         class="rounded-md bg-orange px-4 py-2 text-sm font-semibold text-ink transition hover:brightness-110 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-orange">
+        Download
+      </a>
+    </nav>
+  </header>
+
+  <main id="main">
+
+    <!-- ─────────────────────────────── Hero ─────────────────────────────── -->
+    <section class="hero-bg relative overflow-hidden">
+      <div class="mx-auto grid max-w-6xl items-center gap-12 px-5 py-20 lg:grid-cols-2 lg:py-28">
+
+        <!-- Copy -->
+        <div class="reveal">
+          <div class="mb-5 inline-flex items-center gap-2 rounded-full border border-line bg-panel px-3 py-1 text-xs font-medium text-mute">
+            <span class="h-1.5 w-1.5 animate-pulse rounded-full bg-up"></span>
+            Native desktop · Rust + egui · v0.1.0
+          </div>
+
+          <h1 class="text-4xl font-extrabold leading-[1.05] tracking-tight sm:text-5xl lg:text-6xl">
+            A trading terminal<br />
+            for <span class="text-orange">Alpaca Markets</span>,<br />
+            on your desktop.
+          </h1>
+
+          <p class="mt-6 max-w-xl text-lg leading-relaxed text-mute">
+            Live charts, multi-asset risk/return compare, and full order management —
+            in one fast native window. Built in Rust with
+            <span class="text-white">egui</span>, streaming real-time data over WebSocket.
+            <span class="text-white">Paper trading by default.</span>
+          </p>
+
+          <!-- Primary CTA — text + link are set by script.js to the detected OS -->
+          <div class="mt-9 flex flex-wrap items-center gap-3">
+            <a id="heroDownload" href="#download" download
+               class="group inline-flex items-center gap-2.5 rounded-lg bg-orange px-6 py-3.5 text-base font-semibold text-ink shadow-lg shadow-orange/20 transition hover:brightness-110 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-orange">
+              <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M12 3v12m0 0 4-4m-4 4-4-4M5 21h14" />
+              </svg>
+              <span id="heroDownloadLabel">Download</span>
+            </a>
+            <a href="#features"
+               class="inline-flex items-center gap-2 rounded-lg border border-line bg-panel px-6 py-3.5 text-base font-semibold text-white transition hover:border-mute2 hover:bg-panel2">
+              See features
+            </a>
+          </div>
+
+          <!-- OS detection status (filled in by script.js) -->
+          <p id="osStatus" class="mt-4 font-mono text-xs text-mute2"></p>
+        </div>
+
+        <!-- UI preview: a real screenshot if website/assets/screenshot.png exists,
+             otherwise the stylized CSS/SVG mock below. script.js swaps to the
+             screenshot only once it has loaded, so there's never a broken image. -->
+        <div class="reveal" style="--reveal-delay: 120ms">
+          <img id="heroShot" src="assets/screenshot.png"
+               alt="Alpaca Trading Terminal — application window"
+               class="hidden w-full rounded-xl border border-line shadow-2xl shadow-black/60" />
+          <div id="heroMock">
+          <div class="app-window rounded-xl border border-line bg-panel shadow-2xl shadow-black/60">
+            <!-- window chrome -->
+            <div class="flex items-center gap-2 border-b border-line px-4 py-2.5">
+              <span class="h-3 w-3 rounded-full bg-down/80"></span>
+              <span class="h-3 w-3 rounded-full bg-gold/80"></span>
+              <span class="h-3 w-3 rounded-full bg-up/80"></span>
+              <span class="ml-3 font-mono text-xs text-mute">Alpaca Trading Terminal — AAPL</span>
+            </div>
+            <!-- tab strip (matches the app's real tabs) -->
+            <div class="flex items-center gap-1 border-b border-line px-3 py-2 font-mono text-xs">
+              <span class="rounded px-2.5 py-1 text-mute">Trading Terminal</span>
+              <span class="rounded bg-orange/15 px-2.5 py-1 font-semibold text-orange ring-1 ring-orange/40">Chart</span>
+              <span class="rounded px-2.5 py-1 text-mute">Compare</span>
+            </div>
+            <!-- header data row -->
+            <div class="flex flex-wrap items-baseline gap-x-4 gap-y-1 px-4 pt-3 font-mono text-xs">
+              <span class="text-base font-bold text-white">AAPL</span>
+              <span class="text-up">$232.18 <span class="text-[10px]">▲ +$2.26 (+0.98%)</span></span>
+              <span class="text-mute">H 233.40</span>
+              <span class="text-mute">L 229.10</span>
+              <span class="ml-auto flex gap-1.5">
+                <i class="rounded bg-cyan/15 px-1.5 not-italic text-cyan">EMA 10</i>
+                <i class="rounded bg-gold/15 px-1.5 not-italic text-gold">VWAP</i>
+              </span>
+            </div>
+            <!-- chart: price pane + volume pane (inline SVG) -->
+            <div class="px-3 pb-4 pt-2">
+              <svg viewBox="0 0 360 200" class="h-auto w-full" role="img" aria-label="Stylized multi-pane candlestick chart preview">
+                <!-- grid -->
+                <g stroke="#1c1c1c" stroke-width="1">
+                  <line x1="0" y1="30" x2="360" y2="30" /><line x1="0" y1="70" x2="360" y2="70" />
+                  <line x1="0" y1="110" x2="360" y2="110" />
+                </g>
+                <!-- last-close dashed line -->
+                <line x1="0" y1="46" x2="360" y2="46" stroke="#ff6600" stroke-width="1" stroke-dasharray="3 3" opacity="0.7" />
+                <!-- candlesticks (green up / red down) -->
+                <g stroke-width="6">
+                  <line x1="18"  y1="56" x2="18"  y2="98"  stroke="#00ff41" /><line x1="18"  y1="40" x2="18"  y2="106" stroke="#00ff41" stroke-width="1.5"/>
+                  <line x1="42"  y1="62" x2="42"  y2="90"  stroke="#00ff41" /><line x1="42"  y1="50" x2="42"  y2="100" stroke="#00ff41" stroke-width="1.5"/>
+                  <line x1="66"  y1="70" x2="66"  y2="96"  stroke="#ff3131" /><line x1="66"  y1="58" x2="66"  y2="104" stroke="#ff3131" stroke-width="1.5"/>
+                  <line x1="90"  y1="60" x2="90"  y2="84"  stroke="#00ff41" /><line x1="90"  y1="48" x2="90"  y2="96"  stroke="#00ff41" stroke-width="1.5"/>
+                  <line x1="114" y1="52" x2="114" y2="74"  stroke="#00ff41" /><line x1="114" y1="42" x2="114" y2="86"  stroke="#00ff41" stroke-width="1.5"/>
+                  <line x1="138" y1="58" x2="138" y2="80"  stroke="#ff3131" /><line x1="138" y1="46" x2="138" y2="90"  stroke="#ff3131" stroke-width="1.5"/>
+                  <line x1="162" y1="50" x2="162" y2="72"  stroke="#00ff41" /><line x1="162" y1="40" x2="162" y2="82"  stroke="#00ff41" stroke-width="1.5"/>
+                  <line x1="186" y1="44" x2="186" y2="64"  stroke="#00ff41" /><line x1="186" y1="34" x2="186" y2="74"  stroke="#00ff41" stroke-width="1.5"/>
+                  <line x1="210" y1="50" x2="210" y2="70"  stroke="#ff3131" /><line x1="210" y1="40" x2="210" y2="80"  stroke="#ff3131" stroke-width="1.5"/>
+                  <line x1="234" y1="42" x2="234" y2="60"  stroke="#00ff41" /><line x1="234" y1="32" x2="234" y2="70"  stroke="#00ff41" stroke-width="1.5"/>
+                  <line x1="258" y1="36" x2="258" y2="54"  stroke="#00ff41" /><line x1="258" y1="28" x2="258" y2="62"  stroke="#00ff41" stroke-width="1.5"/>
+                  <line x1="282" y1="40" x2="282" y2="58"  stroke="#ff3131" /><line x1="282" y1="30" x2="282" y2="66"  stroke="#ff3131" stroke-width="1.5"/>
+                  <line x1="306" y1="34" x2="306" y2="50"  stroke="#00ff41" /><line x1="306" y1="26" x2="306" y2="58"  stroke="#00ff41" stroke-width="1.5"/>
+                  <line x1="330" y1="30" x2="330" y2="46"  stroke="#00ff41" /><line x1="330" y1="22" x2="330" y2="54"  stroke="#00ff41" stroke-width="1.5"/>
+                </g>
+                <!-- EMA overlay (cyan) -->
+                <polyline fill="none" stroke="#00bfff" stroke-width="1.5"
+                  points="18,80 42,76 66,82 90,72 114,64 138,68 162,60 186,54 210,58 234,50 258,44 282,48 306,42 330,38" />
+                <!-- volume pane -->
+                <g>
+                  <rect x="14" y="150" width="8" height="26" fill="#00ff41" opacity="0.55"/>
+                  <rect x="38" y="158" width="8" height="18" fill="#00ff41" opacity="0.55"/>
+                  <rect x="62" y="146" width="8" height="30" fill="#ff3131" opacity="0.55"/>
+                  <rect x="86" y="160" width="8" height="16" fill="#00ff41" opacity="0.55"/>
+                  <rect x="110" y="152" width="8" height="24" fill="#00ff41" opacity="0.55"/>
+                  <rect x="134" y="156" width="8" height="20" fill="#ff3131" opacity="0.55"/>
+                  <rect x="158" y="148" width="8" height="28" fill="#00ff41" opacity="0.55"/>
+                  <rect x="182" y="142" width="8" height="34" fill="#00ff41" opacity="0.55"/>
+                  <rect x="206" y="158" width="8" height="18" fill="#ff3131" opacity="0.55"/>
+                  <rect x="230" y="150" width="8" height="26" fill="#00ff41" opacity="0.55"/>
+                  <rect x="254" y="144" width="8" height="32" fill="#00ff41" opacity="0.55"/>
+                  <rect x="278" y="154" width="8" height="22" fill="#ff3131" opacity="0.55"/>
+                  <rect x="302" y="146" width="8" height="30" fill="#00ff41" opacity="0.55"/>
+                  <rect x="326" y="150" width="8" height="26" fill="#00ff41" opacity="0.55"/>
+                </g>
+              </svg>
+            </div>
+          </div>
+          <p class="mt-3 text-center font-mono text-[11px] text-mute2">Illustrative UI preview · Chart tab with EMA + volume panes</p>
+          </div><!-- /#heroMock -->
+        </div>
+      </div>
+    </section>
+
+    <!-- ───────────────────────── Quick-facts strip ───────────────────────── -->
+    <section class="border-y border-line bg-coal">
+      <div class="mx-auto grid max-w-6xl grid-cols-2 gap-px overflow-hidden md:grid-cols-4">
+        <div class="px-5 py-7 text-center">
+          <div class="font-mono text-2xl font-bold text-orange">3 tabs</div>
+          <div class="mt-1 text-xs text-mute">Terminal · Chart · Compare</div>
+        </div>
+        <div class="px-5 py-7 text-center">
+          <div class="font-mono text-2xl font-bold text-cyan">7</div>
+          <div class="mt-1 text-xs text-mute">Built-in indicators</div>
+        </div>
+        <div class="px-5 py-7 text-center">
+          <div class="font-mono text-2xl font-bold text-up">Live</div>
+          <div class="mt-1 text-xs text-mute">WebSocket streaming</div>
+        </div>
+        <div class="px-5 py-7 text-center">
+          <div class="font-mono text-2xl font-bold text-gold">~5–9 MB</div>
+          <div class="mt-1 text-xs text-mute">Single binary, no runtime</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ─────────────────────────────── Features ─────────────────────────────── -->
+    <section id="features" class="mx-auto max-w-6xl px-5 py-20 lg:py-28">
+      <div class="reveal mx-auto max-w-2xl text-center">
+        <h2 class="text-3xl font-bold tracking-tight sm:text-4xl">Everything in one window</h2>
+        <p class="mt-4 text-mute">
+          Three workspaces over the Alpaca REST + data APIs, with a shared live tick cache,
+          command palette, and watchlist riding along on every tab.
+        </p>
+      </div>
+
+      <div class="mt-14 grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
+
+        <!-- Card: Chart -->
+        <article class="reveal feature-card">
+          <div class="feature-ico" style="color:#00bfff">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="m7 14 3-4 3 3 4-6"/></svg>
+          </div>
+          <h3 class="feature-title">TradingView-style charts</h3>
+          <p class="feature-body">
+            Single-symbol multi-pane candlesticks with a shared X-axis and linked crosshair —
+            pan, zoom, or hover any pane and the rest follow. Latest-close line, OHLC tooltip,
+            and active-indicator chips in the header.
+          </p>
+        </article>
+
+        <!-- Card: Indicators -->
+        <article class="reveal feature-card" style="--reveal-delay:60ms">
+          <div class="feature-ico" style="color:#ffd700">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12h4l3 8 4-16 3 8h6"/></svg>
+          </div>
+          <h3 class="feature-title">7 indicators, hotkey-toggled</h3>
+          <p class="feature-body">
+            EMA, SMA, Bollinger Bands, VWAP, Volume, RSI (Wilder) and MACD — pure Rust math,
+            unit-tested. Toggle each with a single key (<span class="kbd">E S B U V I O</span>).
+          </p>
+        </article>
+
+        <!-- Card: Live data -->
+        <article class="reveal feature-card" style="--reveal-delay:120ms">
+          <div class="feature-ico" style="color:#00ff41">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12h3l2-7 4 18 3-11 2 4h6"/></svg>
+          </div>
+          <h3 class="feature-title">Real-time streaming</h3>
+          <p class="feature-body">
+            A dedicated WebSocket thread streams trades, quotes and minute bars into a shared
+            tick cache. Charts patch tick-by-tick and the positions table re-prices P&amp;L live
+            between snapshots.
+          </p>
+        </article>
+
+        <!-- Card: Order management -->
+        <article class="reveal feature-card" style="--reveal-delay:0ms">
+          <div class="feature-ico" style="color:#ff6600">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M4 12h16M4 17h10"/><circle cx="18" cy="17" r="3"/></svg>
+          </div>
+          <h3 class="feature-title">Full order management</h3>
+          <p class="feature-body">
+            Positions, Trade, Orders and Activity sub-tabs. Place market, limit, stop, stop-limit,
+            trailing-stop and bracket orders — each routed through a confirm-before-fire modal.
+          </p>
+        </article>
+
+        <!-- Card: Compare -->
+        <article class="reveal feature-card" style="--reveal-delay:60ms">
+          <div class="feature-ico" style="color:#00bfff">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M7 16l4-6 3 3 4-7"/><circle cx="18" cy="9" r="1.5" fill="currentColor"/></svg>
+          </div>
+          <h3 class="feature-title">Multi-asset Compare</h3>
+          <p class="feature-body">
+            Normalized return lines, drawdown, correlation heatmap, risk/return scatter, and a
+            Monte Carlo growth projection — all aligned to a common history so the math lines up.
+          </p>
+        </article>
+
+        <!-- Card: Command palette + watchlist -->
+        <article class="reveal feature-card" style="--reveal-delay:120ms">
+          <div class="feature-ico" style="color:#ffd700">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="m7 9 3 3-3 3M13 15h4"/></svg>
+          </div>
+          <h3 class="feature-title">Command palette &amp; watchlist</h3>
+          <p class="feature-body">
+            A Bloomberg-style command bar (press <span class="kbd">/</span>) jumps symbols and tabs.
+            A persistent watchlist and ticker tape ride along on every tab, and your layout is
+            saved to disk between sessions.
+          </p>
+        </article>
+      </div>
+    </section>
+
+    <!-- ─────────────────────────────── Download ─────────────────────────────── -->
+    <section id="download" class="border-y border-line bg-coal">
+      <div class="mx-auto max-w-6xl px-5 py-20 lg:py-28">
+        <div class="reveal mx-auto max-w-2xl text-center">
+          <h2 class="text-3xl font-bold tracking-tight sm:text-4xl">Download</h2>
+          <p class="mt-4 text-mute">
+            Free, self-contained binaries — no installer chrome, no runtime to manage.
+            Pick your platform below; we’ll highlight the one that matches your system.
+          </p>
+        </div>
+
+        <!-- Fallback note shown by JS only when the OS can't be detected -->
+        <p id="osFallback" class="mx-auto mt-6 hidden max-w-xl rounded-lg border border-gold/40 bg-gold/10 px-4 py-3 text-center text-sm text-gold">
+          We couldn’t detect your operating system automatically — please choose the right build below.
+        </p>
+
+        <!-- IMPORTANT: download filenames live here and ONLY here (href + data-file).
+             script.js reads them; it never hardcodes a filename. To update a build,
+             edit the href / data-file / data-size on the matching card. -->
+        <div class="mt-12 grid gap-6 md:grid-cols-3">
+
+          <!-- ───── macOS ───── -->
+          <article id="card-macos" data-os="macos"
+                   class="download-card">
+            <span class="recommended-badge hidden">★ Recommended for your system</span>
+            <div class="os-ico">
+              <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M16.36 12.84c-.02-2.1 1.71-3.1 1.79-3.15-.98-1.43-2.5-1.62-3.04-1.64-1.29-.13-2.52.76-3.18.76-.65 0-1.66-.74-2.73-.72-1.4.02-2.7.81-3.42 2.07-1.46 2.53-.37 6.28 1.05 8.33.69 1 1.52 2.13 2.6 2.09 1.04-.04 1.44-.67 2.7-.67 1.26 0 1.62.67 2.73.65 1.13-.02 1.84-1.02 2.53-2.03.8-1.16 1.13-2.29 1.15-2.35-.03-.01-2.2-.84-2.22-3.32M14.3 6.25c.57-.7.96-1.66.85-2.63-.83.04-1.84.55-2.44 1.24-.53.61-1 1.6-.87 2.54.93.07 1.88-.47 2.46-1.15"/></svg>
+            </div>
+            <h3 class="os-title">macOS</h3>
+            <p class="os-sub">Universal · Intel &amp; Apple Silicon · macOS 11+</p>
+
+            <!-- primary download = DMG (data-primary marks it as the hero target) -->
+            <a class="dl-btn" data-primary download
+               data-file="Alpaca_Trading_Terminal_Rust.dmg" data-size="6.9 MB"
+               href="../binaries/main-trading-terminal-rust/Alpaca_Trading_Terminal_Rust.dmg">
+              Download .dmg
+              <span class="dl-size">6.9 MB</span>
+            </a>
+            <!-- secondary: raw universal binary -->
+            <a class="dl-link" download
+               data-file="Alpaca_Trading_Terminal_Rust_MAC_UNIVERSAL" data-size="9.5 MB"
+               href="../binaries/main-trading-terminal-rust/Alpaca_Trading_Terminal_Rust_MAC_UNIVERSAL">
+              or grab the universal binary <span class="text-mute2">(9.5 MB)</span>
+            </a>
+          </article>
+
+          <!-- ───── Windows ───── -->
+          <article id="card-windows" data-os="windows"
+                   class="download-card">
+            <span class="recommended-badge hidden">★ Recommended for your system</span>
+            <div class="os-ico">
+              <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M3 5.5 10.5 4v7.5H3V5.5M11.5 3.9 21 2.5v9H11.5V3.9M3 12.5h7.5V20L3 18.5v-6M11.5 12.5H21v9l-9.5-1.4v-7.6"/></svg>
+            </div>
+            <h3 class="os-title">Windows</h3>
+            <p class="os-sub">Windows 10 / 11 · 64-bit · portable .exe</p>
+
+            <a class="dl-btn" data-primary download
+               data-file="Alpaca_Trading_Terminal_Rust_WIN.exe" data-size="5.2 MB"
+               href="../binaries/main-trading-terminal-rust/Alpaca_Trading_Terminal_Rust_WIN.exe">
+              Download .exe
+              <span class="dl-size">5.2 MB</span>
+            </a>
+            <p class="dl-link text-mute2">No install — double-click to run.</p>
+          </article>
+
+          <!-- ───── Linux ───── (no prebuilt binary — build from source) -->
+          <article id="card-linux" data-os="linux"
+                   class="download-card">
+            <span class="recommended-badge hidden">★ Recommended for your system</span>
+            <div class="os-ico">
+              <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2c-1.7 0-3 1.6-3 3.6 0 1 .3 1.7.3 2.5 0 1-1.2 1.8-2 3.4-.8 1.5-1.6 3.4-1.6 4.8 0 .9.4 1.4 1 1.7-.1.5 0 1 .4 1.4.6.6 1.7.8 2.9.8s2.3-.2 2.9-.8c.4-.4.5-.9.4-1.4.6-.3 1-.8 1-1.7 0-1.4-.8-3.3-1.6-4.8-.8-1.6-2-2.4-2-3.4 0-.8.3-1.5.3-2.5C15 3.6 13.7 2 12 2m-1.2 4c.3 0 .6.4.6.9s-.3.9-.6.9-.6-.4-.6-.9.3-.9.6-.9m2.4 0c.3 0 .6.4.6.9s-.3.9-.6.9-.6-.4-.6-.9.3-.9.6-.9"/></svg>
+            </div>
+            <h3 class="os-title">Linux</h3>
+            <p class="os-sub">x86-64 · built on Ubuntu in CI</p>
+
+            <a class="dl-btn" data-primary download
+               data-file="Alpaca_Trading_Terminal_Rust_LINUX" data-size="x64"
+               href="../binaries/main-trading-terminal-rust/Alpaca_Trading_Terminal_Rust_LINUX">
+              Download binary
+              <span class="dl-size">x64</span>
+            </a>
+            <a class="dl-link" href="#install">or build from source with cargo</a>
+          </article>
+        </div>
+
+        <p class="mt-8 text-center font-mono text-xs text-mute2">
+          Binaries are unsigned. See the install notes below for the one-time
+          Gatekeeper / SmartScreen step.
+        </p>
+      </div>
+    </section>
+
+    <!-- ─────────────────────────────── Install ─────────────────────────────── -->
+    <section id="install" class="mx-auto max-w-6xl px-5 py-20 lg:py-28">
+      <div class="reveal mx-auto max-w-2xl text-center">
+        <h2 class="text-3xl font-bold tracking-tight sm:text-4xl">Install &amp; run</h2>
+        <p class="mt-4 text-mute">
+          On first launch the app prompts for your Alpaca API key &amp; secret and stores them at
+          <code class="path">~/Library/Application Support/alpaca-tui/credentials.json</code>
+          (or the OS-equivalent). It defaults to the
+          <span class="text-white">paper-trading</span> API.
+        </p>
+      </div>
+
+      <div class="mt-12 grid gap-6 lg:grid-cols-3">
+
+        <!-- macOS install -->
+        <div class="reveal install-card">
+          <h3 class="install-head"><span class="text-orange">macOS</span></h3>
+          <ol class="install-steps">
+            <li>Open the <code>.dmg</code> and drag the app out, or download the universal binary.</li>
+            <li>First run is blocked by Gatekeeper (unsigned). Clear the quarantine flag:</li>
+          </ol>
+          <div class="code">
+            <button class="copy-btn" type="button" aria-label="Copy command">Copy</button>
+            <pre><code>chmod +x Alpaca_Trading_Terminal_Rust_MAC_UNIVERSAL
+xattr -d com.apple.quarantine \
+  Alpaca_Trading_Terminal_Rust_MAC_UNIVERSAL
+./Alpaca_Trading_Terminal_Rust_MAC_UNIVERSAL</code></pre>
+          </div>
+          <p class="install-foot">Or: right-click → Open → Open to bypass once.</p>
+        </div>
+
+        <!-- Windows install -->
+        <div class="reveal install-card" style="--reveal-delay:60ms">
+          <h3 class="install-head"><span class="text-cyan">Windows</span></h3>
+          <ol class="install-steps">
+            <li>Double-click <code>Alpaca_Trading_Terminal_Rust_WIN.exe</code>.</li>
+            <li>SmartScreen may warn (unsigned). Choose <em>More info → Run anyway</em>.</li>
+            <li>Re-enter credentials any time with the reset flag:</li>
+          </ol>
+          <div class="code">
+            <button class="copy-btn" type="button" aria-label="Copy command">Copy</button>
+            <pre><code>Alpaca_Trading_Terminal_Rust_WIN.exe --reset</code></pre>
+          </div>
+          <p class="install-foot">Portable — no installer, runs from anywhere.</p>
+        </div>
+
+        <!-- Build from source -->
+        <div class="reveal install-card" style="--reveal-delay:120ms">
+          <h3 class="install-head"><span class="text-up">From source</span> <span class="text-mute2 text-sm">(Linux / any)</span></h3>
+          <ol class="install-steps">
+            <li>Needs the <a class="lnk" href="https://www.rust-lang.org/tools/install">Rust toolchain</a>.</li>
+            <li>Build the release binary and run it:</li>
+          </ol>
+          <div class="code">
+            <button class="copy-btn" type="button" aria-label="Copy command">Copy</button>
+            <pre><code>cd main-trading-terminal-rust
+cargo build --release
+./target/release/alpaca-egui</code></pre>
+          </div>
+          <p class="install-foot">Linux TLS uses native-tls — install <code>libssl-dev</code> / <code>pkg-config</code> if linking fails.</p>
+        </div>
+      </div>
+
+      <p class="reveal mx-auto mt-10 max-w-3xl rounded-lg border border-line bg-panel px-5 py-4 text-center text-sm text-mute">
+        <span class="font-semibold text-white">Bring your own keys.</span>
+        You’ll need an <a class="lnk" href="https://alpaca.markets/">Alpaca</a> account and API keys.
+        The credentials file is shared with the other terminal builds in this project, so binaries
+        swap without re-entering keys.
+      </p>
+    </section>
+
+    <!-- ─────────────────────────────── Source ─────────────────────────────── -->
+    <section id="source" class="border-t border-line bg-coal">
+      <div class="mx-auto max-w-6xl px-5 py-20 lg:py-24">
+        <div class="reveal grid items-center gap-10 lg:grid-cols-2">
+          <div>
+            <h2 class="text-3xl font-bold tracking-tight sm:text-4xl">Open source</h2>
+            <p class="mt-4 max-w-xl text-mute">
+              Built in Rust 2021 on <span class="text-white">eframe / egui / egui_plot</span>,
+              with <span class="text-white">ureq</span> for REST and
+              <span class="text-white">tungstenite</span> for the live WebSocket. The Rust app
+              lives alongside Go and Electron ports of the same terminal in one repository.
+            </p>
+            <div class="mt-7 flex flex-wrap gap-3">
+              <!-- Real repository origin. Update if the canonical URL changes. -->
+              <a href="https://github.com/GitnNcode/Alpaca_trading_terminal"
+                 class="inline-flex items-center gap-2.5 rounded-lg bg-white px-5 py-3 text-sm font-semibold text-ink transition hover:brightness-90">
+                <svg class="h-5 w-5" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2C6.48 2 2 6.58 2 12.25c0 4.53 2.87 8.37 6.84 9.73.5.1.68-.22.68-.49 0-.24-.01-.88-.01-1.72-2.78.62-3.37-1.37-3.37-1.37-.45-1.18-1.11-1.49-1.11-1.49-.91-.64.07-.63.07-.63 1 .07 1.53 1.06 1.53 1.06.89 1.56 2.34 1.11 2.91.85.09-.66.35-1.11.63-1.37-2.22-.26-4.56-1.14-4.56-5.07 0-1.12.39-2.03 1.03-2.75-.1-.26-.45-1.3.1-2.71 0 0 .84-.27 2.75 1.05a9.4 9.4 0 0 1 2.5-.34c.85 0 1.71.12 2.5.34 1.91-1.32 2.75-1.05 2.75-1.05.55 1.41.2 2.45.1 2.71.64.72 1.03 1.63 1.03 2.75 0 3.94-2.34 4.81-4.57 5.06.36.32.68.94.68 1.9 0 1.37-.01 2.47-.01 2.81 0 .27.18.6.69.49A10.02 10.02 0 0 0 22 12.25C22 6.58 17.52 2 12 2"/></svg>
+                View on GitHub
+              </a>
+              <a href="https://github.com/GitnNcode/Alpaca_trading_terminal/tree/main/main-trading-terminal-rust"
+                 class="inline-flex items-center gap-2 rounded-lg border border-line bg-panel px-5 py-3 text-sm font-semibold text-white transition hover:border-mute2 hover:bg-panel2">
+                Browse the Rust source
+              </a>
+            </div>
+          </div>
+
+          <!-- tech stack chips -->
+          <div class="reveal" style="--reveal-delay:80ms">
+            <div class="rounded-xl border border-line bg-panel p-6">
+              <div class="mb-4 font-mono text-xs uppercase tracking-widest text-mute2">Stack</div>
+              <div class="flex flex-wrap gap-2 font-mono text-xs">
+                <span class="chip">Rust 2021</span>
+                <span class="chip">eframe 0.29</span>
+                <span class="chip">egui 0.29</span>
+                <span class="chip">egui_plot</span>
+                <span class="chip">ureq</span>
+                <span class="chip">tungstenite</span>
+                <span class="chip">serde</span>
+                <span class="chip">chrono</span>
+                <span class="chip">csv</span>
+                <span class="chip">anyhow</span>
+              </div>
+              <div class="mt-6 grid grid-cols-2 gap-4 border-t border-line pt-5 text-center font-mono">
+                <div>
+                  <div class="text-xl font-bold text-orange">16</div>
+                  <div class="text-[11px] text-mute">source files</div>
+                </div>
+                <div>
+                  <div class="text-xl font-bold text-cyan">paper-api</div>
+                  <div class="text-[11px] text-mute">safe by default</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- ─────────────────────────────── Footer ─────────────────────────────── -->
+  <footer class="border-t border-line bg-ink">
+    <div class="mx-auto max-w-6xl px-5 py-10">
+      <div class="flex flex-col items-center justify-between gap-6 sm:flex-row">
+        <div class="flex items-center gap-2.5">
+          <img src="assets/logo.png" alt="" class="h-7 w-7 rounded-md ring-1 ring-line" />
+          <span class="font-mono text-sm font-bold">ALPACA<span class="text-orange">::</span>TERMINAL</span>
+        </div>
+        <nav class="flex flex-wrap items-center justify-center gap-x-6 gap-y-2 text-sm text-mute">
+          <a href="#features" class="transition hover:text-white">Features</a>
+          <a href="#download" class="transition hover:text-white">Download</a>
+          <a href="#install" class="transition hover:text-white">Install</a>
+          <a href="https://github.com/GitnNcode/Alpaca_trading_terminal" class="transition hover:text-white">GitHub</a>
+        </nav>
+      </div>
+      <div class="mt-8 border-t border-line pt-6 text-center text-xs leading-relaxed text-mute2">
+        <p>
+          An independent, open-source desktop client. Not affiliated with, endorsed by, or sponsored by
+          Alpaca Markets. Trading involves risk; the app defaults to Alpaca’s paper-trading endpoint.
+        </p>
+        <p class="mt-2">© <span id="year">2026</span> Alpaca Trading Terminal · Built with Rust + egui</p>
+      </div>
+    </div>
+  </footer>
+
+  <script src="script.js"></script>
+</body>
+</html>

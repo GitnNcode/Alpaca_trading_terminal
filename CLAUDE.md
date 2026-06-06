@@ -8,7 +8,7 @@ Multi-implementation Alpaca trading terminal: one canonical TUI plus several arc
 |------|-------|--------|
 | [main-trading-terminal-go/](main-trading-terminal-go/CLAUDE.md) | Go 1.22 + tview + tcell | **Canonical** — feature-complete, 38 tests |
 | [ratatui-trading-terminal-rust/](ratatui-trading-terminal-rust/CLAUDE.md) | Rust + ratatui + crossterm + ureq | Port, feature-matched to early state |
-| [chart-compare-gui-rust/](chart-compare-gui-rust/CLAUDE.md) | Rust + eframe/egui + egui_plot | Chart + Compare GUI (multi-asset risk/return, Monte Carlo) |
+| [main-trading-terminal-rust/](main-trading-terminal-rust/CLAUDE.md) | Rust + eframe/egui + egui_plot | Three-tab desktop GUI — Trading Terminal (full order mgmt) + Chart (TradingView-style) + Compare (multi-asset risk/return, Monte Carlo) |
 | [chart-compare-bloomberg/](chart-compare-bloomberg/CLAUDE.md) | Electron + TS/React + Python (FastAPI/numpy) | Bloomberg-style desktop port of the chart + compare GUI |
 | [backtest-terminal-go/](backtest-terminal-go/CLAUDE.md) | Go + tview (separate module) | Standalone strategy backtester |
 

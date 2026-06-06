@@ -1,6 +1,6 @@
 # Chart + Compare — Bloomberg-Style Build
 
-Port of [chart-compare-gui-rust](../chart-compare-gui-rust/) onto a Bloomberg-Professional-style stack: Electron (C++ Chromium + V8) shell, TypeScript + React renderer, Python (FastAPI + numpy) sidecar for all Alpaca calls and quant math. Read-only — order entry stays in the canonical Go build.
+Port of [main-trading-terminal-rust](../main-trading-terminal-rust/) onto a Bloomberg-Professional-style stack: Electron (C++ Chromium + V8) shell, TypeScript + React renderer, Python (FastAPI + numpy) sidecar for all Alpaca calls and quant math. Read-only — order entry stays in the canonical Go build.
 
 ## Stack
 - **Main process:** Electron 28, TypeScript, `tsc -p tsconfig.main.json` → `dist/main/`

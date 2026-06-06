@@ -1,6 +1,6 @@
 # Chart + Compare — Bloomberg-Style Build
 
-Bloomberg-terminal-style port of the [Rust egui chart+compare GUI](../chart-compare-gui-rust/),
+Bloomberg-terminal-style port of the [Rust egui chart+compare GUI](../main-trading-terminal-rust/),
 using the same stack idea as the real Bloomberg Professional Service:
 
 | Layer | Bloomberg's stack | This build |
