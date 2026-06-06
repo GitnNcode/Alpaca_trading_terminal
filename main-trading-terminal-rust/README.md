@@ -96,10 +96,12 @@ sudo apt-get install -y \
   libxkbcommon-dev libssl-dev libgl1-mesa-dev
 ```
 
-The Linux release binary is produced by the
+The Linux release binary is built by the
 [`deploy-site` GitHub Actions workflow](../.github/workflows/deploy-site.yml) on
-a real Ubuntu runner and committed into `binaries/` — a GUI app can't be
-cross-compiled cleanly from macOS/Windows.
+a real Ubuntu runner and bundled straight into the published site — a GUI app
+can't be cross-compiled cleanly from macOS/Windows. (CI no longer commits it
+back, so pushing never forces a pull; an initial copy is kept here for local
+preview.)
 
 ## Tests
 

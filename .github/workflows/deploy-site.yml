@@ -2,12 +2,14 @@ name: Build Linux binary & deploy download site
 
 # Two jobs:
 #   1. build-linux — compile the Rust egui app on a real Ubuntu runner (a GUI
-#      app can't be cross-compiled cleanly from macOS/Windows), drop the binary
-#      into binaries/, commit it back to the repo, and hand it to the deploy job
-#      as an artifact.
+#      app can't be cross-compiled cleanly from macOS/Windows) and hand the
+#      binary to the deploy job as an artifact. It is NOT committed back to the
+#      repo, so a push never forces you to pull afterward.
 #   2. deploy — stage website/ + binaries/ into _site (preserving the site's
-#      ../binaries relative links) and publish to GitHub Pages. The site ends up
-#      at  https://<owner>.github.io/<repo>/website/
+#      ../binaries relative links), inject the freshly built Linux binary, and
+#      publish to GitHub Pages. Pages is enabled automatically (enablement: true)
+#      so there is no manual Settings toggle. The site ends up at
+#      https://<owner>.github.io/<repo>/website/
 
 on:
   push:
@@ -22,7 +24,7 @@ on:
   workflow_dispatch:   # lets you run it by hand from the Actions tab
 
 permissions:
-  contents: write   # commit the rebuilt Linux binary back into binaries/
+  contents: read    # checkout only — the workflow no longer writes to the repo
   pages: write      # publish to Pages
   id-token: write   # OIDC token for actions/deploy-pages
 
@@ -52,33 +54,19 @@ jobs:
         working-directory: main-trading-terminal-rust
         run: cargo build --release
 
-      - name: Stage binary into binaries/
+      - name: Stage binary
         run: |
-          mkdir -p binaries/main-trading-terminal-rust
+          mkdir -p out
           cp main-trading-terminal-rust/target/release/alpaca-egui \
-             binaries/main-trading-terminal-rust/Alpaca_Trading_Terminal_Rust_LINUX
-          chmod +x binaries/main-trading-terminal-rust/Alpaca_Trading_Terminal_Rust_LINUX
+             out/Alpaca_Trading_Terminal_Rust_LINUX
+          chmod +x out/Alpaca_Trading_Terminal_Rust_LINUX
 
       - name: Upload binary for the deploy job
         uses: actions/upload-artifact@v4
         with:
           name: linux-binary
-          path: binaries/main-trading-terminal-rust/Alpaca_Trading_Terminal_Rust_LINUX
+          path: out/Alpaca_Trading_Terminal_Rust_LINUX
           if-no-files-found: error
-
-      - name: Commit the binary back into the repo (only if it changed)
-        run: |
-          git config user.name  "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add binaries/main-trading-terminal-rust/Alpaca_Trading_Terminal_Rust_LINUX
-          if git diff --cached --quiet; then
-            echo "Linux binary unchanged — nothing to commit."
-          else
-            git commit -m "ci: rebuild Linux binary for Rust app"
-            git pull --rebase --autostash origin "${GITHUB_REF_NAME}" || true
-            git push origin "HEAD:${GITHUB_REF_NAME}" \
-              || echo "::warning::push failed (non-fatal) — binary is still in this deploy + the artifact"
-          fi
 
   deploy:
     needs: build-linux
@@ -89,21 +77,23 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Inject the binary built moments ago so the deployed site is never stale,
-      # regardless of whether the commit-back above raced with another push.
-      - name: Pull the freshly built Linux binary
-        uses: actions/download-artifact@v4
-        with:
-          name: linux-binary
-          path: binaries/main-trading-terminal-rust
-
       - name: Stage _site (keeps the site's ../binaries links valid)
         run: |
-          mkdir -p _site/website _site/binaries
+          mkdir -p _site/website _site/binaries/main-trading-terminal-rust
           cp -R website/.  _site/website/
           cp -R binaries/. _site/binaries/
 
+      # Drop the freshly built Linux binary in on top, so the published site is
+      # never stale even though it is never committed to the repo.
+      - name: Inject the freshly built Linux binary
+        uses: actions/download-artifact@v4
+        with:
+          name: linux-binary
+          path: _site/binaries/main-trading-terminal-rust
+
       - uses: actions/configure-pages@v5
+        with:
+          enablement: true   # create/enable the Pages site automatically — no manual Settings toggle
       - uses: actions/upload-pages-artifact@v3
         with:
           path: _site
