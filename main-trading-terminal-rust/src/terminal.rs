@@ -1607,6 +1607,7 @@ mod tests {
             filled_qty: qty.to_string(),
             filled_avg_price: Some(avg.to_string()),
             created_at: chrono::Utc::now(),
+            asset_class: "us_equity".to_string(),
         }
     }
 

@@ -1,11 +1,18 @@
 use anyhow::{anyhow, Result};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::time::Duration;
 
 use crate::config::Credentials;
 
 pub const ALPACA_DATA_BASE: &str = "https://data.alpaca.markets";
+
+/// Options market-data feed. `indicative` is the free/paper feed (the only one
+/// available without signing the OPRA agreement). One swap-point — flip to
+/// `opra` here if/when the account gains the real-time entitlement (which also
+/// unlocks greeks/IV on the snapshot). See docs/adr/0001.
+pub const OPTIONS_DATA_FEED: &str = "indicative";
 
 #[derive(Clone)]
 pub struct AlpacaClient {
@@ -26,6 +33,11 @@ pub struct Position {
     pub avg_entry_price: String,
     pub current_price: String,
     pub side: String,
+    /// `us_equity` or `us_option`. The Options desk filters on this to show
+    /// only option positions; the Terminal tab leaves it unfiltered. Defaulted
+    /// so older payloads (or feeds that omit it) still parse.
+    #[serde(default)]
+    pub asset_class: String,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -98,6 +110,10 @@ pub struct Order {
     #[serde(default)]
     pub filled_avg_price: Option<String>,
     pub created_at: DateTime<Utc>,
+    /// `us_equity` or `us_option`. The Options desk Orders sub-tab filters on
+    /// this; Terminal leaves it unfiltered.
+    #[serde(default)]
+    pub asset_class: String,
 }
 
 impl Order {
@@ -173,6 +189,103 @@ pub struct Bar {
 struct BarsResponse {
     #[serde(default)]
     bars: Vec<Bar>,
+    #[serde(default)]
+    next_page_token: Option<String>,
+}
+
+// ---------------- Options ----------------
+//
+// Two sources feed the Options Chain (see docs/adr/0001):
+//   - `/v2/options/contracts` (trading API) → the chain skeleton: every
+//     contract's strike / expiration / type / open interest / prev close.
+//   - `/v1beta1/options/snapshots/{underlying}` (data API, indicative feed) →
+//     bid/ask + last + daily/prev bars for initial fill and %chg.
+// Live bid/ask updates ride the options WebSocket (see stream.rs), not these.
+
+/// One option contract as returned by `/v2/options/contracts`. Only the fields
+/// the Chain needs are deserialized; the rest of the payload is dropped. A few
+/// (name / underlying / tradable) are carried for completeness / future use.
+#[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
+pub struct OptionContract {
+    /// OCC symbol, e.g. `AAPL260619C00150000`.
+    pub symbol: String,
+    #[serde(default)]
+    pub name: String,
+    /// `YYYY-MM-DD`.
+    #[serde(default)]
+    pub expiration_date: String,
+    #[serde(default)]
+    pub underlying_symbol: String,
+    /// `call` or `put`.
+    #[serde(default, rename = "type")]
+    pub kind: String,
+    /// Strike as a decimal string, e.g. `150`.
+    #[serde(default)]
+    pub strike_price: String,
+    #[serde(default)]
+    pub open_interest: Option<String>,
+    /// Previous-day close of the contract — the reference for %chg.
+    #[serde(default)]
+    pub close_price: Option<String>,
+    #[serde(default)]
+    pub tradable: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct OptionContractsResponse {
+    #[serde(default)]
+    option_contracts: Vec<OptionContract>,
+    #[serde(default)]
+    next_page_token: Option<String>,
+}
+
+/// Per-contract snapshot from `/v1beta1/options/snapshots`. On the indicative
+/// feed this carries quotes/trades/bars but NOT greeks or IV (those need the
+/// paid OPRA feed) — so the v1 Chain shows no greeks.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct OptionSnapshot {
+    #[serde(default, rename = "latestQuote")]
+    pub latest_quote: Option<OptQuote>,
+    #[serde(default, rename = "latestTrade")]
+    pub latest_trade: Option<OptTrade>,
+    #[serde(default, rename = "dailyBar")]
+    pub daily_bar: Option<OptBar>,
+    #[serde(default, rename = "prevDailyBar")]
+    pub prev_daily_bar: Option<OptBar>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[allow(dead_code)] // bid_size / ask_size parsed for completeness; not shown in v1
+pub struct OptQuote {
+    #[serde(rename = "bp", default)]
+    pub bid: f64,
+    #[serde(rename = "bs", default)]
+    pub bid_size: f64,
+    #[serde(rename = "ap", default)]
+    pub ask: f64,
+    #[serde(rename = "as", default)]
+    pub ask_size: f64,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct OptTrade {
+    #[serde(rename = "p", default)]
+    pub price: f64,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct OptBar {
+    #[serde(rename = "c", default)]
+    pub close: f64,
+    #[serde(rename = "v", default)]
+    pub volume: f64,
+}
+
+#[derive(Debug, Deserialize)]
+struct OptionSnapshotsResponse {
+    #[serde(default)]
+    snapshots: HashMap<String, OptionSnapshot>,
     #[serde(default)]
     next_page_token: Option<String>,
 }
@@ -307,6 +420,82 @@ impl AlpacaClient {
             Ok(r) => Self::handle_resp(r),
             Err(e) => Err(Self::handle_err(e)),
         }
+    }
+
+    /// Fetch the option-contract list for an underlying (the chain skeleton),
+    /// covering expirations from today out ~2 years. The explicit date window
+    /// is load-bearing: WITHOUT it the endpoint returns only the few
+    /// nearest-dated expirations, so the chain would be missing most of its
+    /// expiration dropdown. Paginated + capped; the UI groups by expiration.
+    pub fn get_option_contracts(&self, underlying: &str) -> Result<Vec<OptionContract>> {
+        let today = Utc::now().date_naive();
+        let lte = today + chrono::Duration::days(730);
+        let gte_s = today.format("%Y-%m-%d").to_string();
+        let lte_s = lte.format("%Y-%m-%d").to_string();
+        let mut all: Vec<OptionContract> = Vec::new();
+        let mut page_token: Option<String> = None;
+        loop {
+            let mut url = format!(
+                "{}/v2/options/contracts?underlying_symbols={}&expiration_date_gte={}&expiration_date_lte={}&limit=10000",
+                self.base_url,
+                urlencode(underlying),
+                gte_s,
+                lte_s,
+            );
+            if let Some(tok) = &page_token {
+                url.push_str("&page_token=");
+                url.push_str(&urlencode(tok));
+            }
+            let resp = match self.auth(self.agent.get(&url)).call() {
+                Ok(r) => r,
+                Err(e) => return Err(Self::handle_err(e)),
+            };
+            let cr: OptionContractsResponse = Self::handle_resp(resp)?;
+            all.extend(cr.option_contracts);
+            match cr.next_page_token {
+                Some(t) if !t.is_empty() => page_token = Some(t),
+                _ => break,
+            }
+            if all.len() > 20_000 {
+                break;
+            }
+        }
+        Ok(all)
+    }
+
+    /// Fetch snapshots (bid/ask + last + daily bars) for every listed contract
+    /// of an underlying, keyed by OCC symbol. Uses the indicative feed. The
+    /// live WebSocket keeps the displayed rows fresher than this; the snapshot
+    /// is the initial fill + the source of %chg / open-interest-adjacent data.
+    pub fn get_option_snapshots(&self, underlying: &str) -> Result<HashMap<String, OptionSnapshot>> {
+        let mut all: HashMap<String, OptionSnapshot> = HashMap::new();
+        let mut page_token: Option<String> = None;
+        loop {
+            let mut url = format!(
+                "{}/v1beta1/options/snapshots/{}?feed={}&limit=1000",
+                ALPACA_DATA_BASE,
+                urlencode(underlying),
+                OPTIONS_DATA_FEED,
+            );
+            if let Some(tok) = &page_token {
+                url.push_str("&page_token=");
+                url.push_str(&urlencode(tok));
+            }
+            let resp = match self.auth(self.agent.get(&url)).call() {
+                Ok(r) => r,
+                Err(e) => return Err(Self::handle_err(e)),
+            };
+            let sr: OptionSnapshotsResponse = Self::handle_resp(resp)?;
+            all.extend(sr.snapshots);
+            match sr.next_page_token {
+                Some(t) if !t.is_empty() => page_token = Some(t),
+                _ => break,
+            }
+            if all.len() > 20_000 {
+                break;
+            }
+        }
+        Ok(all)
     }
 
     pub fn get_bars(

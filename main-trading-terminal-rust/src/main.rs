@@ -8,6 +8,7 @@ mod command;
 mod compare;
 mod config;
 mod indicators;
+mod options;
 mod persist;
 mod stocks;
 mod stream;

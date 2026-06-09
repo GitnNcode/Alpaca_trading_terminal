@@ -1,24 +1,27 @@
-# Chart + Compare GUI (Rust + egui)
+# Chart + Compare + Terminal + Options GUI (Rust + egui)
 
-Three-tab desktop GUI:
+Four-tab desktop GUI:
+- **Trading Terminal** — port of the canonical Go terminal's account-management surface; renders a *secondary* sub-tab strip beneath the top tab strip for `Positions / Trade / Orders / Activity`
 - **Chart** — single-symbol multi-pane TradingView-style chart matching the main build's indicators
 - **Compare** — multi-asset risk/return view (normalized lines, drawdown, scatter, Monte Carlo)
-- **Terminal** — port of the canonical Go terminal's account-management surface; renders a *secondary* sub-tab strip beneath the top tab strip for `Positions / Trade / Orders / Activity`
+- **Options** — options desk with its own sub-tab strip `Chain / Positions / Orders`. Type an underlying, pick an expiration, see a calls/puts strike grid (bid/ask/last/vol/OI), place single-leg Market/Limit orders. See [src/options.rs](src/options.rs), [CONTEXT.md](CONTEXT.md), and [docs/adr/0001-options-chain-hybrid-rest-snapshot-plus-live-ws.md](docs/adr/0001-options-chain-hybrid-rest-snapshot-plus-live-ws.md).
 
 ## Stack
 - Rust 2021, `eframe` 0.29 + `egui` 0.29 + `egui_plot` 0.29
 - `ureq` for HTTP, `tungstenite` 0.24 (native-tls) for the live data WebSocket, `chrono`, `serde` / `serde_json`, `csv`, `dirs`, `anyhow`
-- 16 source files in [src/](src/), 67 tests
+- 17 source files in [src/](src/), 80 tests
 
 ## Commands (run from this directory)
 - Build: `cargo build --release` (output: `target/release/alpaca-egui`)
 - Run: `cargo run --release`
 - Reset stored credentials: `cargo run --release -- --reset`
-- Test: `cargo test` (21 tests — indicators + compare math)
+- Test: `cargo test` (80 tests — indicators + compare math + terminal order-build + command parser + options OCC/chain/order-build)
 
 ## Architecture rules
 
-- **Tab routing.** `Tab` enum in [src/app.rs](src/app.rs) selects Chart / Compare / Terminal. **Chart-tab indicator hotkeys (`V B S E U I O`) are gated on `current_tab == Tab::Chart`** so they don't fire silently while on Compare or Terminal. The Terminal tab renders its own sub-tab strip (Positions / Trade / Orders / Activity) right under the top strip — sub-tab number hotkeys `1..4` also gate on focus to avoid stealing keys from the Trade form's text fields.
+- **Tab routing.** `Tab` enum in [src/app.rs](src/app.rs) selects Chart / Compare / Terminal / **Options**. **Chart-tab indicator hotkeys (`V B S E U I O`) are gated on `current_tab == Tab::Chart`** so they don't fire silently on other tabs. Both the Terminal and Options tabs render their own sub-tab strip right under the top strip with number hotkeys gated on focus (Terminal `1..4` for Positions/Trade/Orders/Activity; Options `1..3` for Chain/Positions/Orders). There are NO top-tab number hotkeys — top tabs switch by click or command-palette code.
+- **Options desk** ([src/options.rs](src/options.rs), [docs/adr/0001](docs/adr/0001-options-chain-hybrid-rest-snapshot-plus-live-ws.md)). Hybrid Chain data: `client.get_option_contracts` (skeleton + OI + prev-close — **must pass an `expiration_date_gte/lte` window or the endpoint returns only the few nearest expirations**) + `client.get_option_snapshots` (indicative feed: bid/ask/last; **no greeks/IV** — OPRA unsigned, so v1 shows none) + a SECOND WebSocket overlaying live bid/ask. Single-leg Market/Limit orders only, built by `options::build_option_order` and routed through the same two-phase confirm modal as Terminal (OCC symbol flows through `/v2/orders`). Lazy-primed (`options_primed`) + 10s refresh of options Positions/Orders, exactly like Terminal. Reach it via the `OPT <TICKER>` palette code. Positions/Orders are filtered to `asset_class == "us_option"`; the Terminal tab is left unfiltered (options may appear in both — intentional).
+- **Two live data streams, one tick cache.** `stream::spawn_stream` is called twice in `ChartApp::new` — once for stocks (`STREAM_URL`, IEX, `report_status=true`, `subscribe_bars=true`) and once for options (`OPTIONS_STREAM_URL`, `/v1beta1/indicative`, `report_status=false`, `subscribe_bars=false`). Both write OCC-/symbol-keyed entries into the SAME shared `TickCache` (no key collision). The options stream subscribes to the displayed expiration's contracts ∪ held option positions, ONLY while the Options tab is open (off-tab it gets the empty set). `subscribe_bars=false` for options because the indicative feed carries trades/quotes only. **Don't make the options stream report status** — the stock stream owns the single `stream_connected` flag.
 - **Background HTTP.** `std::thread` + `mpsc::channel` in [src/workers.rs](src/workers.rs). `Msg` variants: `Assets`, `Bars` (Chart), `CompareBars` (Compare per-slot), plus the Terminal-tab set: `Positions`, `AccountInfo`, `OpenOrders`, `ClosedOrders`, `Activities`, `OrderPlaced { req_summary, result }`, `OrderCancelled { id, result }`. Every worker calls `ctx.request_repaint()` after sending.
 - **Terminal tab is lazy + auto-refresh.** Nothing is fetched until the user first opens the Terminal tab (`terminal_primed: bool` flips on first visit). While the tab is active, `ChartApp::update` checks `terminal.last_refresh.elapsed() >= 10s` every frame and re-runs `TerminalState::refresh_all` — matches the Go terminal's 10s background goroutine. A `ctx.request_repaint_after(1s)` keeps the timer honest when the user isn't moving the mouse. Don't run the refresh while on Chart/Compare — burning API calls on a tab nobody is looking at.
 - **Order placement is two-phase.** Clicking PLACE ORDER in the Trade sub-tab does *not* hit Alpaca directly; it stashes the validated `OrderRequest` in `terminal.place_confirm` and pops an `egui::Window` modal. Only the modal's CONFIRM button calls `workers::spawn_place_order`. Same shape for cancels via `cancel_confirm`. **Don't bypass this** — the Go terminal's tests lock in the confirm-before-fire UX.

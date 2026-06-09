@@ -3,13 +3,17 @@
 // symbol/range/timeframe. Each runs on its own thread, sends a Msg back via
 // mpsc, and wakes the egui UI via ctx.request_repaint().
 
+use std::collections::HashMap;
 use std::sync::mpsc::Sender;
 use std::sync::Arc;
 use std::thread;
 
 use chrono::{Datelike, Duration as ChronoDuration, TimeZone, Utc};
 
-use crate::api::{Account, Activity, AlpacaClient, Bar, Order, OrderRequest, Position};
+use crate::api::{
+    Account, Activity, AlpacaClient, Bar, OptionContract, OptionSnapshot, Order, OrderRequest,
+    Position,
+};
 
 pub enum Msg {
     Assets(anyhow::Result<Vec<crate::api::Asset>>),
@@ -68,6 +72,32 @@ pub enum Msg {
         // (CLAUDE.md tier-3 status bar). Surfaced only when that lands.
         #[allow(dead_code)]
         latency_ms: Option<u32>,
+    },
+    // ---- Options desk fetches ----
+    /// Chain skeleton for an underlying. `gen` + `underlying` let the receiver
+    /// drop a stale response when the user has since loaded a different name.
+    OptionContracts {
+        underlying: String,
+        gen: u64,
+        result: anyhow::Result<Vec<OptionContract>>,
+    },
+    /// Bid/ask + bars per contract, keyed by OCC symbol. Same stale guard.
+    OptionSnapshots {
+        underlying: String,
+        gen: u64,
+        result: anyhow::Result<HashMap<String, OptionSnapshot>>,
+    },
+    /// Positions filtered to options live in the Options desk; this is the raw
+    /// `/v2/positions` result (the receiver filters on `asset_class`).
+    OptPositions(anyhow::Result<Vec<Position>>),
+    OptOpenOrders(anyhow::Result<Vec<Order>>),
+    OptOrderPlaced {
+        req_summary: String,
+        result: anyhow::Result<Order>,
+    },
+    OptOrderCancelled {
+        id: String,
+        result: anyhow::Result<()>,
     },
 }
 
@@ -222,6 +252,77 @@ pub fn spawn_load_trade_chart(
         let start = now - ChronoDuration::days(95);
         let bars = client.get_bars(&symbol, "1Day", start, end);
         let _ = tx.send(Msg::TradeChartBars { symbol, gen, bars });
+        ctx.request_repaint();
+    });
+}
+
+// ---------------- Options desk spawn helpers ----------------
+
+pub fn spawn_option_contracts(
+    client: Arc<AlpacaClient>,
+    tx: Sender<Msg>,
+    ctx: egui::Context,
+    underlying: String,
+    gen: u64,
+) {
+    thread::spawn(move || {
+        let result = client.get_option_contracts(&underlying);
+        let _ = tx.send(Msg::OptionContracts { underlying, gen, result });
+        ctx.request_repaint();
+    });
+}
+
+pub fn spawn_option_snapshots(
+    client: Arc<AlpacaClient>,
+    tx: Sender<Msg>,
+    ctx: egui::Context,
+    underlying: String,
+    gen: u64,
+) {
+    thread::spawn(move || {
+        let result = client.get_option_snapshots(&underlying);
+        let _ = tx.send(Msg::OptionSnapshots { underlying, gen, result });
+        ctx.request_repaint();
+    });
+}
+
+pub fn spawn_option_positions(client: Arc<AlpacaClient>, tx: Sender<Msg>, ctx: egui::Context) {
+    thread::spawn(move || {
+        let _ = tx.send(Msg::OptPositions(client.get_positions()));
+        ctx.request_repaint();
+    });
+}
+
+pub fn spawn_option_open_orders(client: Arc<AlpacaClient>, tx: Sender<Msg>, ctx: egui::Context) {
+    thread::spawn(move || {
+        let _ = tx.send(Msg::OptOpenOrders(client.get_orders()));
+        ctx.request_repaint();
+    });
+}
+
+pub fn spawn_option_place_order(
+    client: Arc<AlpacaClient>,
+    tx: Sender<Msg>,
+    ctx: egui::Context,
+    req: OrderRequest,
+    req_summary: String,
+) {
+    thread::spawn(move || {
+        let result = client.place_order(&req);
+        let _ = tx.send(Msg::OptOrderPlaced { req_summary, result });
+        ctx.request_repaint();
+    });
+}
+
+pub fn spawn_option_cancel_order(
+    client: Arc<AlpacaClient>,
+    tx: Sender<Msg>,
+    ctx: egui::Context,
+    id: String,
+) {
+    thread::spawn(move || {
+        let result = client.cancel_order(&id);
+        let _ = tx.send(Msg::OptOrderCancelled { id, result });
         ctx.request_repaint();
     });
 }

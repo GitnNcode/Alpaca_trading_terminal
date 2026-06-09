@@ -37,7 +37,13 @@ use crate::workers::Msg;
 
 /// Default IEX endpoint — the only feed available on the free tier. Paid
 /// tiers can swap for `/sip` or `/test` via env override.
-const STREAM_URL: &str = "wss://stream.data.alpaca.markets/v2/iex";
+pub const STREAM_URL: &str = "wss://stream.data.alpaca.markets/v2/iex";
+
+/// Options market-data stream. `indicative` is the free/paper feed; swap to
+/// `opra` here (one place) when the OPRA agreement is signed. The frame format
+/// is identical to the stock stream (trades `t` / quotes `q` / bars `b` keyed
+/// by OCC symbol), so the same read loop handles both. See docs/adr/0001.
+pub const OPTIONS_STREAM_URL: &str = "wss://stream.data.alpaca.markets/v1beta1/indicative";
 
 /// Minimum backoff between reconnect attempts. Doubles up to MAX_BACKOFF.
 const MIN_BACKOFF: Duration = Duration::from_secs(1);
@@ -89,6 +95,13 @@ pub fn new_tick_cache() -> TickCache {
 #[derive(Clone)]
 pub enum SubMsg {
     SetSubscriptions(HashSet<String>),
+    /// Activate / deactivate this stream. Alpaca's free data plan allows only
+    /// ONE concurrent WebSocket connection per account (shared across the
+    /// stock and options feeds), so the app keeps exactly one stream active at
+    /// a time and flips the other off. A deactivated stream holds no socket
+    /// and makes no reconnect attempts; it keeps its `desired` set so it
+    /// resubscribes cleanly when reactivated. See docs/adr/0001.
+    SetActive(bool),
     /// Swap in a fresh AlpacaClient (new api_key/api_secret) and force the
     /// thread to drop the current socket so it reconnects + re-auths on the
     /// next outer-loop iteration. Used by the "api change" command flow.
@@ -107,6 +120,7 @@ impl std::fmt::Debug for SubMsg {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             SubMsg::SetSubscriptions(s) => f.debug_tuple("SetSubscriptions").field(s).finish(),
+            SubMsg::SetActive(a) => f.debug_tuple("SetActive").field(a).finish(),
             SubMsg::ReplaceClient(_) => write!(f, "ReplaceClient(<redacted>)"),
             SubMsg::Shutdown => write!(f, "Shutdown"),
         }
@@ -117,36 +131,92 @@ impl std::fmt::Debug for SubMsg {
 /// (kept on ChartApp; used to push subscription changes) — and *nothing
 /// else*, because the tick stream lands in `cache` and status lands on the
 /// existing app `Msg` channel.
+///
+/// `url` selects the feed (stock IEX vs options indicative); `report_status`
+/// gates the `Msg::StreamStatus` emissions so a second (options) stream
+/// doesn't fight the first over the single `stream_connected` flag.
+/// `subscribe_bars` controls whether the `bars` channel is included in
+/// subscribe frames. The stock IEX stream wants minute bars (the chart morphs
+/// its last candle from them); the options indicative stream only carries
+/// trades/quotes, so passing `bars` there risks the server rejecting the whole
+/// frame — we omit it.
+/// `start_active` decides whether this stream connects immediately or waits
+/// idle for a `SubMsg::SetActive(true)`. The app starts the stock stream
+/// active and the options stream idle, then flips them as the user moves on/off
+/// the Options tab (one connection at a time — Alpaca's plan limit).
+#[allow(clippy::too_many_arguments)]
 pub fn spawn_stream(
     client: Arc<AlpacaClient>,
     tx: Sender<Msg>,
     ctx: egui::Context,
     cache: TickCache,
+    url: &'static str,
+    report_status: bool,
+    subscribe_bars: bool,
+    start_active: bool,
 ) -> Sender<SubMsg> {
     let (sub_tx, sub_rx) = std::sync::mpsc::channel();
     thread::spawn(move || {
-        run_loop(client, tx, ctx, cache, sub_rx);
+        run_loop(
+            client, tx, ctx, cache, sub_rx, url, report_status, subscribe_bars, start_active,
+        );
     });
     sub_tx
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_loop(
     mut client: Arc<AlpacaClient>,
     tx: Sender<Msg>,
     ctx: egui::Context,
     cache: TickCache,
     sub_rx: Receiver<SubMsg>,
+    url: &'static str,
+    report_status: bool,
+    subscribe_bars: bool,
+    mut active: bool,
 ) {
     let mut backoff = MIN_BACKOFF;
     // The most recent desired subscription set, regardless of connection
-    // state. Survives disconnects so we re-subscribe to the right symbols
-    // on reconnect.
+    // state. Survives disconnects AND deactivation so we re-subscribe to the
+    // right symbols whenever we (re)connect.
     let mut desired: HashSet<String> = HashSet::new();
 
     loop {
-        emit_status(&tx, &ctx, false, None);
-        match connect_and_serve(&client, &tx, &ctx, &cache, &sub_rx, &mut desired) {
+        // Idle: hold no socket, block until a control message. This is the
+        // deactivated state — the OTHER stream owns the single allowed
+        // connection right now.
+        if !active {
+            if report_status {
+                emit_status(&tx, &ctx, false, None);
+            }
+            match sub_rx.recv() {
+                Ok(SubMsg::SetActive(a)) => {
+                    active = a;
+                    backoff = MIN_BACKOFF;
+                }
+                Ok(SubMsg::SetSubscriptions(set)) => desired = set,
+                Ok(SubMsg::ReplaceClient(new)) => client = new,
+                Ok(SubMsg::Shutdown) => return,
+                Err(_) => return, // app dropped the sender — exit cleanly
+            }
+            continue;
+        }
+
+        if report_status {
+            emit_status(&tx, &ctx, false, None);
+        }
+        match connect_and_serve(
+            &client, &tx, &ctx, &cache, &sub_rx, &mut desired, url, report_status, subscribe_bars,
+        ) {
             Ok(ShutdownReason::Requested) => break,
+            Ok(ShutdownReason::Deactivated) => {
+                // The app moved focus to the other feed; go idle without
+                // backoff so reactivation is instant.
+                active = false;
+                backoff = MIN_BACKOFF;
+                continue;
+            }
             Ok(ShutdownReason::ClientReplaced(new)) => {
                 // No backoff — the user just typed `api change` and is
                 // waiting to see the stream reconnect. Swap in the new
@@ -156,17 +226,21 @@ fn run_loop(
                 continue;
             }
             Ok(ShutdownReason::Disconnected) | Err(_) => {
-                // Drain any subscription updates that arrived during the
-                // disconnected window so we re-subscribe with the latest.
+                // Drain any updates that arrived during the disconnected
+                // window so we re-subscribe / re-activate with the latest.
                 while let Ok(msg) = sub_rx.try_recv() {
                     match msg {
                         SubMsg::SetSubscriptions(set) => desired = set,
+                        SubMsg::SetActive(a) => active = a,
                         SubMsg::ReplaceClient(new) => {
                             client = new;
                             backoff = MIN_BACKOFF;
                         }
                         SubMsg::Shutdown => return,
                     }
+                }
+                if !active {
+                    continue; // deactivated mid-retry; loop back to idle
                 }
                 thread::sleep(backoff);
                 backoff = (backoff * 2).min(MAX_BACKOFF);
@@ -179,6 +253,10 @@ fn run_loop(
 enum ShutdownReason {
     Requested,
     Disconnected,
+    /// The UI sent `SubMsg::SetActive(false)` — this feed yields the single
+    /// allowed connection to the other stream. The socket is closed and the
+    /// outer loop drops to its idle state.
+    Deactivated,
     /// The UI sent a new AlpacaClient via `SubMsg::ReplaceClient`. The outer
     /// `run_loop` swaps the local client and immediately reconnects (no
     /// backoff) so the user sees the stream auth with the new key right away.
@@ -189,6 +267,7 @@ enum ShutdownReason {
 /// Returns `Disconnected` on any transport error so the outer loop can
 /// reconnect with backoff. Returns `Requested` only when the UI explicitly
 /// asks the thread to stop.
+#[allow(clippy::too_many_arguments)]
 fn connect_and_serve(
     client: &AlpacaClient,
     tx: &Sender<Msg>,
@@ -196,8 +275,11 @@ fn connect_and_serve(
     cache: &TickCache,
     sub_rx: &Receiver<SubMsg>,
     desired: &mut HashSet<String>,
+    url: &str,
+    report_status: bool,
+    subscribe_bars: bool,
 ) -> Result<ShutdownReason, anyhow::Error> {
-    let (mut socket, _resp) = connect(STREAM_URL)?;
+    let (mut socket, _resp) = connect(url)?;
     set_read_timeout(&mut socket, READ_TIMEOUT)?;
 
     // Alpaca sends a `[{"T":"success","msg":"connected"}]` greeting
@@ -213,9 +295,11 @@ fn connect_and_serve(
     // The desired set may already be populated (a prior connection's). Send
     // a fresh subscribe so the new socket gets it.
     let mut subscribed: HashSet<String> = HashSet::new();
-    sync_subscriptions(&mut socket, &mut subscribed, desired)?;
+    sync_subscriptions(&mut socket, &mut subscribed, desired, subscribe_bars)?;
 
-    emit_status(tx, ctx, true, None);
+    if report_status {
+        emit_status(tx, ctx, true, None);
+    }
 
     loop {
         // 1) Poll the sub channel — non-blocking.
@@ -223,8 +307,14 @@ fn connect_and_serve(
             match sub_rx.try_recv() {
                 Ok(SubMsg::SetSubscriptions(new_set)) => {
                     *desired = new_set;
-                    sync_subscriptions(&mut socket, &mut subscribed, desired)?;
+                    sync_subscriptions(&mut socket, &mut subscribed, desired, subscribe_bars)?;
                 }
+                Ok(SubMsg::SetActive(false)) => {
+                    // Yield the connection to the other feed.
+                    let _ = socket.close(None);
+                    return Ok(ShutdownReason::Deactivated);
+                }
+                Ok(SubMsg::SetActive(true)) => { /* already serving — no-op */ }
                 Ok(SubMsg::ReplaceClient(new_client)) => {
                     // Drop the socket and bubble the new client up to
                     // `run_loop` so the next connect uses the fresh creds.
@@ -289,22 +379,29 @@ fn sync_subscriptions(
     socket: &mut WebSocket<MaybeTlsStream<TcpStream>>,
     subscribed: &mut HashSet<String>,
     desired: &HashSet<String>,
+    include_bars: bool,
 ) -> Result<(), anyhow::Error> {
     let add: Vec<&String> = desired.difference(subscribed).collect();
     let drop: Vec<&String> = subscribed.difference(desired).collect();
 
     if !drop.is_empty() {
-        let frame = serde_json::json!({
+        let mut frame = serde_json::json!({
             "action": "unsubscribe",
-            "trades": drop, "quotes": drop, "bars": drop,
+            "trades": drop, "quotes": drop,
         });
+        if include_bars {
+            frame["bars"] = serde_json::json!(drop);
+        }
         socket.send(Message::Text(frame.to_string()))?;
     }
     if !add.is_empty() {
-        let frame = serde_json::json!({
+        let mut frame = serde_json::json!({
             "action": "subscribe",
-            "trades": add, "quotes": add, "bars": add,
+            "trades": add, "quotes": add,
         });
+        if include_bars {
+            frame["bars"] = serde_json::json!(add);
+        }
         socket.send(Message::Text(frame.to_string()))?;
     }
     *subscribed = desired.clone();
@@ -494,6 +591,41 @@ mod tests {
         handle_payload(payload, &cache, &ctx).unwrap();
         assert_eq!(cache.read().unwrap().get("AAPL").unwrap().last_price, Some(100.0));
         assert_eq!(cache.read().unwrap().get("MSFT").unwrap().last_price, Some(420.5));
+    }
+
+    #[test]
+    #[ignore] // TEMP — verifies mutual-exclusion handoff against live Alpaca. Close the app first.
+    fn live_mutual_exclusion_handoff() {
+        let creds = crate::config::load_credentials().unwrap();
+        let client = std::sync::Arc::new(crate::api::AlpacaClient::new(creds));
+        let cache = new_tick_cache();
+        let (tx, _rx) = std::sync::mpsc::channel();
+        let ctx = egui::Context::default();
+
+        // Mirror the app's startup: stock active, options idle.
+        let stock = spawn_stream(
+            client.clone(), tx.clone(), ctx.clone(), cache.clone(), STREAM_URL, true, true, true,
+        );
+        let opts = spawn_stream(
+            client.clone(), tx.clone(), ctx.clone(), cache.clone(), OPTIONS_STREAM_URL, false, false, false,
+        );
+        stock
+            .send(SubMsg::SetSubscriptions(["AAPL".to_string()].into_iter().collect()))
+            .unwrap();
+        eprintln!("--- phase 1: stock ACTIVE, options idle (4s) — expect clean stock auth, no 406 ---");
+        std::thread::sleep(Duration::from_secs(4));
+
+        // Simulate switching to the Options tab: free stock, claim options.
+        eprintln!("--- handoff: stock -> idle, options -> active ---");
+        stock.send(SubMsg::SetActive(false)).unwrap();
+        opts.send(SubMsg::SetSubscriptions(
+            ["AAPL260619C00150000".to_string()].into_iter().collect(),
+        ))
+        .unwrap();
+        opts.send(SubMsg::SetActive(true)).unwrap();
+        eprintln!("--- phase 2: options ACTIVE, stock idle (5s) — expect clean options auth, no 406 ---");
+        std::thread::sleep(Duration::from_secs(5));
+        eprintln!("--- done ---");
     }
 
     #[test]

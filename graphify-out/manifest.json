@@ -89,151 +89,6 @@
     "ast_hash": "8ce050b6fbaac8b5d65d42513f934f2c",
     "semantic_hash": "8ce050b6fbaac8b5d65d42513f934f2c"
   },
-  "/Users/adityamishra/personal-important/Codeing stuff/adi-js/alpaca/Alpaca_trading_terminal/chart-compare-bloomberg/package.json": {
-    "mtime": 1779161097.736351,
-    "ast_hash": "f29f6c8a387923334e11e1bfd7ed0607",
-    "semantic_hash": "f29f6c8a387923334e11e1bfd7ed0607"
-  },
-  "/Users/adityamishra/personal-important/Codeing stuff/adi-js/alpaca/Alpaca_trading_terminal/chart-compare-bloomberg/python/alpaca.py": {
-    "mtime": 1779309146.5049677,
-    "ast_hash": "7d307d2a97ac6644ebaf49725fa541db",
-    "semantic_hash": "7d307d2a97ac6644ebaf49725fa541db"
-  },
-  "/Users/adityamishra/personal-important/Codeing stuff/adi-js/alpaca/Alpaca_trading_terminal/chart-compare-bloomberg/python/config.py": {
-    "mtime": 1779309217.2877436,
-    "ast_hash": "533fb13c03e3e756705ba10f5d75bea5",
-    "semantic_hash": "533fb13c03e3e756705ba10f5d75bea5"
-  },
-  "/Users/adityamishra/personal-important/Codeing stuff/adi-js/alpaca/Alpaca_trading_terminal/chart-compare-bloomberg/python/indicators.py": {
-    "mtime": 1779309118.5005019,
-    "ast_hash": "d52c2722887e3b3cb7fdf65ce4a2ce72",
-    "semantic_hash": "d52c2722887e3b3cb7fdf65ce4a2ce72"
-  },
-  "/Users/adityamishra/personal-important/Codeing stuff/adi-js/alpaca/Alpaca_trading_terminal/chart-compare-bloomberg/python/metrics.py": {
-    "mtime": 1779159848.9925451,
-    "ast_hash": "c413580867391f7fd1a8da98c55d30ca",
-    "semantic_hash": "c413580867391f7fd1a8da98c55d30ca"
-  },
-  "/Users/adityamishra/personal-important/Codeing stuff/adi-js/alpaca/Alpaca_trading_terminal/chart-compare-bloomberg/python/monte_carlo.py": {
-    "mtime": 1779161991.0195508,
-    "ast_hash": "58ab96a29eb369deb1d24987da14be0e",
-    "semantic_hash": "58ab96a29eb369deb1d24987da14be0e"
-  },
-  "/Users/adityamishra/personal-important/Codeing stuff/adi-js/alpaca/Alpaca_trading_terminal/chart-compare-bloomberg/python/server.py": {
-    "mtime": 1779159902.7638352,
-    "ast_hash": "6ff8b616e7041249c7b9cb663f599ab5",
-    "semantic_hash": "6ff8b616e7041249c7b9cb663f599ab5"
-  },
-  "/Users/adityamishra/personal-important/Codeing stuff/adi-js/alpaca/Alpaca_trading_terminal/chart-compare-bloomberg/src/main/main.ts": {
-    "mtime": 1779159919.5087907,
-    "ast_hash": "1d969e5033ca5abd59fef8adbf10e036",
-    "semantic_hash": "1d969e5033ca5abd59fef8adbf10e036"
-  },
-  "/Users/adityamishra/personal-important/Codeing stuff/adi-js/alpaca/Alpaca_trading_terminal/chart-compare-bloomberg/src/main/preload.ts": {
-    "mtime": 1779159922.129447,
-    "ast_hash": "75c8e0a3f4a9f11b205690b5ca0d77ca",
-    "semantic_hash": "75c8e0a3f4a9f11b205690b5ca0d77ca"
-  },
-  "/Users/adityamishra/personal-important/Codeing stuff/adi-js/alpaca/Alpaca_trading_terminal/chart-compare-bloomberg/src/main/sidecar.ts": {
-    "mtime": 1779159931.7670197,
-    "ast_hash": "5099090cc1266b893d9847decb53b87d",
-    "semantic_hash": "5099090cc1266b893d9847decb53b87d"
-  },
-  "/Users/adityamishra/personal-important/Codeing stuff/adi-js/alpaca/Alpaca_trading_terminal/chart-compare-bloomberg/src/renderer/App.tsx": {
-    "mtime": 1779161141.7627661,
-    "ast_hash": "cd963b9b67ba246df7e362fc91ebdf89",
-    "semantic_hash": "cd963b9b67ba246df7e362fc91ebdf89"
-  },
-  "/Users/adityamishra/personal-important/Codeing stuff/adi-js/alpaca/Alpaca_trading_terminal/chart-compare-bloomberg/src/renderer/components/ChartTab.tsx": {
-    "mtime": 1779163204.059662,
-    "ast_hash": "16ec878682c4ab92cc00fcf9b84efb08",
-    "semantic_hash": "16ec878682c4ab92cc00fcf9b84efb08"
-  },
-  "/Users/adityamishra/personal-important/Codeing stuff/adi-js/alpaca/Alpaca_trading_terminal/chart-compare-bloomberg/src/renderer/components/CompareTab.tsx": {
-    "mtime": 1779162269.0348086,
-    "ast_hash": "e1bdb63d5225aae7fccb1e2b55bd4575",
-    "semantic_hash": "e1bdb63d5225aae7fccb1e2b55bd4575"
-  },
-  "/Users/adityamishra/personal-important/Codeing stuff/adi-js/alpaca/Alpaca_trading_terminal/chart-compare-bloomberg/src/renderer/components/CredentialsModal.tsx": {
-    "mtime": 1779160090.2349675,
-    "ast_hash": "ba5c405bb594e969bfc31776366f4f68",
-    "semantic_hash": "ba5c405bb594e969bfc31776366f4f68"
-  },
-  "/Users/adityamishra/personal-important/Codeing stuff/adi-js/alpaca/Alpaca_trading_terminal/chart-compare-bloomberg/src/renderer/components/FunctionBar.tsx": {
-    "mtime": 1779160073.634738,
-    "ast_hash": "4b1f5c9af627e3e0bccc03d5a5c74223",
-    "semantic_hash": "4b1f5c9af627e3e0bccc03d5a5c74223"
-  },
-  "/Users/adityamishra/personal-important/Codeing stuff/adi-js/alpaca/Alpaca_trading_terminal/chart-compare-bloomberg/src/renderer/components/StatusBar.tsx": {
-    "mtime": 1779160077.9756472,
-    "ast_hash": "9468ebbc0b89549eb7385e6be4c10ea0",
-    "semantic_hash": "9468ebbc0b89549eb7385e6be4c10ea0"
-  },
-  "/Users/adityamishra/personal-important/Codeing stuff/adi-js/alpaca/Alpaca_trading_terminal/chart-compare-bloomberg/src/renderer/components/SymbolAutocomplete.tsx": {
-    "mtime": 1779160124.5300379,
-    "ast_hash": "b8e0f8ebce4d7a1eda78db6bd3009804",
-    "semantic_hash": "b8e0f8ebce4d7a1eda78db6bd3009804"
-  },
-  "/Users/adityamishra/personal-important/Codeing stuff/adi-js/alpaca/Alpaca_trading_terminal/chart-compare-bloomberg/src/renderer/components/compare/Heatmap.tsx": {
-    "mtime": 1779160292.794501,
-    "ast_hash": "846a122cdf7ce50c2fea1506b5f8ca95",
-    "semantic_hash": "846a122cdf7ce50c2fea1506b5f8ca95"
-  },
-  "/Users/adityamishra/personal-important/Codeing stuff/adi-js/alpaca/Alpaca_trading_terminal/chart-compare-bloomberg/src/renderer/components/compare/MonteCarlo.tsx": {
-    "mtime": 1779160345.235244,
-    "ast_hash": "687b09b6b15cf26a44f17fd659102c75",
-    "semantic_hash": "687b09b6b15cf26a44f17fd659102c75"
-  },
-  "/Users/adityamishra/personal-important/Codeing stuff/adi-js/alpaca/Alpaca_trading_terminal/chart-compare-bloomberg/src/renderer/components/compare/NormalizedAndDrawdown.tsx": {
-    "mtime": 1779160278.6719573,
-    "ast_hash": "618790eaba0444f024bdfdcc1b8a2481",
-    "semantic_hash": "618790eaba0444f024bdfdcc1b8a2481"
-  },
-  "/Users/adityamishra/personal-important/Codeing stuff/adi-js/alpaca/Alpaca_trading_terminal/chart-compare-bloomberg/src/renderer/components/compare/Scatter.tsx": {
-    "mtime": 1779160309.354476,
-    "ast_hash": "44f3361f671e111e53957e1ad0e4d3dd",
-    "semantic_hash": "44f3361f671e111e53957e1ad0e4d3dd"
-  },
-  "/Users/adityamishra/personal-important/Codeing stuff/adi-js/alpaca/Alpaca_trading_terminal/chart-compare-bloomberg/src/renderer/index.tsx": {
-    "mtime": 1779160050.416153,
-    "ast_hash": "6e438ca9f0d506526f68884778233d89",
-    "semantic_hash": "6e438ca9f0d506526f68884778233d89"
-  },
-  "/Users/adityamishra/personal-important/Codeing stuff/adi-js/alpaca/Alpaca_trading_terminal/chart-compare-bloomberg/src/renderer/lib/api.ts": {
-    "mtime": 1779161106.6173506,
-    "ast_hash": "82f71351a5160bc9b67f9081f4b7decc",
-    "semantic_hash": "82f71351a5160bc9b67f9081f4b7decc"
-  },
-  "/Users/adityamishra/personal-important/Codeing stuff/adi-js/alpaca/Alpaca_trading_terminal/chart-compare-bloomberg/src/renderer/lib/format.ts": {
-    "mtime": 1779160111.9165077,
-    "ast_hash": "b1891f72efef7c2c4dc950dae6234ec4",
-    "semantic_hash": "b1891f72efef7c2c4dc950dae6234ec4"
-  },
-  "/Users/adityamishra/personal-important/Codeing stuff/adi-js/alpaca/Alpaca_trading_terminal/chart-compare-bloomberg/src/shared/types.js": {
-    "mtime": 1779160860.5274005,
-    "ast_hash": "8963201168a2449f79025884824955f2",
-    "semantic_hash": "8963201168a2449f79025884824955f2"
-  },
-  "/Users/adityamishra/personal-important/Codeing stuff/adi-js/alpaca/Alpaca_trading_terminal/chart-compare-bloomberg/src/shared/types.ts": {
-    "mtime": 1779159945.7097218,
-    "ast_hash": "6d1223ee5a3e4fbac2c31041f9567d6b",
-    "semantic_hash": "6d1223ee5a3e4fbac2c31041f9567d6b"
-  },
-  "/Users/adityamishra/personal-important/Codeing stuff/adi-js/alpaca/Alpaca_trading_terminal/chart-compare-bloomberg/tsconfig.json": {
-    "mtime": 1779159770.0780377,
-    "ast_hash": "be919192b53b685602d33d8078c335fa",
-    "semantic_hash": "be919192b53b685602d33d8078c335fa"
-  },
-  "/Users/adityamishra/personal-important/Codeing stuff/adi-js/alpaca/Alpaca_trading_terminal/chart-compare-bloomberg/tsconfig.main.json": {
-    "mtime": 1779161265.89326,
-    "ast_hash": "f01975bc4f2b3ff432e2eb0782a33449",
-    "semantic_hash": "f01975bc4f2b3ff432e2eb0782a33449"
-  },
-  "/Users/adityamishra/personal-important/Codeing stuff/adi-js/alpaca/Alpaca_trading_terminal/chart-compare-bloomberg/vite.config.ts": {
-    "mtime": 1779159776.0110185,
-    "ast_hash": "61b1c1b6c4a109e95c6722e5c669290d",
-    "semantic_hash": "61b1c1b6c4a109e95c6722e5c669290d"
-  },
   "/Users/adityamishra/personal-important/Codeing stuff/adi-js/alpaca/Alpaca_trading_terminal/main-trading-terminal-go/api.go": {
     "mtime": 1778647333.1002424,
     "ast_hash": "ce03fd91a7bc62e7c06e2114e7c61bb7",
@@ -349,90 +204,15 @@
     "ast_hash": "29050aefb6e5f389d3d2dbdc14c5bba9",
     "semantic_hash": "29050aefb6e5f389d3d2dbdc14c5bba9"
   },
-  "/Users/adityamishra/personal-important/Codeing stuff/adi-js/alpaca/Alpaca_trading_terminal/ratatui-trading-terminal-rust/src/api.rs": {
-    "mtime": 1778604498.9499898,
-    "ast_hash": "1292fc31457b400dca239af6d28fdc7e",
-    "semantic_hash": "1292fc31457b400dca239af6d28fdc7e"
-  },
-  "/Users/adityamishra/personal-important/Codeing stuff/adi-js/alpaca/Alpaca_trading_terminal/ratatui-trading-terminal-rust/src/app.rs": {
-    "mtime": 1779092117.9065366,
-    "ast_hash": "470c8958f3af6e68c4ae44c1af478c67",
-    "semantic_hash": "470c8958f3af6e68c4ae44c1af478c67"
-  },
-  "/Users/adityamishra/personal-important/Codeing stuff/adi-js/alpaca/Alpaca_trading_terminal/ratatui-trading-terminal-rust/src/chart.rs": {
-    "mtime": 1778708373.7424679,
-    "ast_hash": "3a604a8d02b676c66a24f0b82db9f39c",
-    "semantic_hash": "3a604a8d02b676c66a24f0b82db9f39c"
-  },
-  "/Users/adityamishra/personal-important/Codeing stuff/adi-js/alpaca/Alpaca_trading_terminal/ratatui-trading-terminal-rust/src/config.rs": {
-    "mtime": 1779091913.374117,
-    "ast_hash": "3408b38c46e70e200d8ba75793a51c2a",
-    "semantic_hash": "3408b38c46e70e200d8ba75793a51c2a"
-  },
-  "/Users/adityamishra/personal-important/Codeing stuff/adi-js/alpaca/Alpaca_trading_terminal/ratatui-trading-terminal-rust/src/fmp.rs": {
-    "mtime": 1779092041.174355,
-    "ast_hash": "623bb56f955311d6af65ced7a999bddb",
-    "semantic_hash": "623bb56f955311d6af65ced7a999bddb"
-  },
-  "/Users/adityamishra/personal-important/Codeing stuff/adi-js/alpaca/Alpaca_trading_terminal/ratatui-trading-terminal-rust/src/indicators.rs": {
-    "mtime": 1778707792.097026,
-    "ast_hash": "dbb6b20939c696bdfd21eba9f23ffe60",
-    "semantic_hash": "dbb6b20939c696bdfd21eba9f23ffe60"
-  },
-  "/Users/adityamishra/personal-important/Codeing stuff/adi-js/alpaca/Alpaca_trading_terminal/ratatui-trading-terminal-rust/src/input.rs": {
-    "mtime": 1779092254.1969154,
-    "ast_hash": "fd014299fc4f12592ffe3534bff7c2c7",
-    "semantic_hash": "fd014299fc4f12592ffe3534bff7c2c7"
-  },
-  "/Users/adityamishra/personal-important/Codeing stuff/adi-js/alpaca/Alpaca_trading_terminal/ratatui-trading-terminal-rust/src/llm.rs": {
-    "mtime": 1779091987.197819,
-    "ast_hash": "c3e8fcd479bc2744bd70e4228470c2f4",
-    "semantic_hash": "c3e8fcd479bc2744bd70e4228470c2f4"
-  },
-  "/Users/adityamishra/personal-important/Codeing stuff/adi-js/alpaca/Alpaca_trading_terminal/ratatui-trading-terminal-rust/src/main.rs": {
-    "mtime": 1779092550.234325,
-    "ast_hash": "297e32336c0f1cf0a435c75a6f9a0d8b",
-    "semantic_hash": "297e32336c0f1cf0a435c75a6f9a0d8b"
-  },
-  "/Users/adityamishra/personal-important/Codeing stuff/adi-js/alpaca/Alpaca_trading_terminal/ratatui-trading-terminal-rust/src/setup.rs": {
-    "mtime": 1779092575.2936184,
-    "ast_hash": "ab7ede33893781f399e035122530670e",
-    "semantic_hash": "ab7ede33893781f399e035122530670e"
-  },
-  "/Users/adityamishra/personal-important/Codeing stuff/adi-js/alpaca/Alpaca_trading_terminal/ratatui-trading-terminal-rust/src/stocks.rs": {
-    "mtime": 1778604428.6847582,
-    "ast_hash": "52e9cb430d3c134936bdef13daa473ee",
-    "semantic_hash": "52e9cb430d3c134936bdef13daa473ee"
-  },
-  "/Users/adityamishra/personal-important/Codeing stuff/adi-js/alpaca/Alpaca_trading_terminal/ratatui-trading-terminal-rust/src/theme.rs": {
-    "mtime": 1778603927.7236092,
-    "ast_hash": "e26105c874492cc8192b661d863255da",
-    "semantic_hash": "e26105c874492cc8192b661d863255da"
-  },
-  "/Users/adityamishra/personal-important/Codeing stuff/adi-js/alpaca/Alpaca_trading_terminal/ratatui-trading-terminal-rust/src/trade_log.rs": {
-    "mtime": 1778604175.8028176,
-    "ast_hash": "193cbdedf71babb8f6c07ac1590b363b",
-    "semantic_hash": "193cbdedf71babb8f6c07ac1590b363b"
-  },
-  "/Users/adityamishra/personal-important/Codeing stuff/adi-js/alpaca/Alpaca_trading_terminal/ratatui-trading-terminal-rust/src/ui.rs": {
-    "mtime": 1779092338.4711068,
-    "ast_hash": "b5628f5b1199c743c200026aa4530977",
-    "semantic_hash": "b5628f5b1199c743c200026aa4530977"
-  },
-  "/Users/adityamishra/personal-important/Codeing stuff/adi-js/alpaca/Alpaca_trading_terminal/ratatui-trading-terminal-rust/src/workers.rs": {
-    "mtime": 1779092140.8737857,
-    "ast_hash": "a87255e70daa4151f6f943325ede1e64",
-    "semantic_hash": "a87255e70daa4151f6f943325ede1e64"
-  },
   "/Users/adityamishra/personal-important/Codeing stuff/adi-js/alpaca/Alpaca_trading_terminal/.claude/skills/claude-md-writer/SKILL.md": {
     "mtime": 1779090004.6166935,
     "ast_hash": "00dc1af07255fde06f5379ebb1d4dfea",
     "semantic_hash": "00dc1af07255fde06f5379ebb1d4dfea"
   },
   "/Users/adityamishra/personal-important/Codeing stuff/adi-js/alpaca/Alpaca_trading_terminal/CLAUDE.md": {
-    "mtime": 1779160441.7850926,
-    "ast_hash": "da7ccb2560307229007467615989f0f4",
-    "semantic_hash": "da7ccb2560307229007467615989f0f4"
+    "mtime": 1780737205.8140895,
+    "ast_hash": "95cf251f3a385aaf88a9e7bb07e1b81c",
+    "semantic_hash": "95cf251f3a385aaf88a9e7bb07e1b81c"
   },
   "/Users/adityamishra/personal-important/Codeing stuff/adi-js/alpaca/Alpaca_trading_terminal/README.md": {
     "mtime": 1779087035.4159431,
@@ -443,26 +223,6 @@
     "mtime": 1779090317.348648,
     "ast_hash": "43459cd245af47d6bf9030ee16e49330",
     "semantic_hash": "43459cd245af47d6bf9030ee16e49330"
-  },
-  "/Users/adityamishra/personal-important/Codeing stuff/adi-js/alpaca/Alpaca_trading_terminal/chart-compare-bloomberg/CLAUDE.md": {
-    "mtime": 1779160418.8586013,
-    "ast_hash": "17b9ed64cf210cd06d4b25394dc36bfc",
-    "semantic_hash": "17b9ed64cf210cd06d4b25394dc36bfc"
-  },
-  "/Users/adityamishra/personal-important/Codeing stuff/adi-js/alpaca/Alpaca_trading_terminal/chart-compare-bloomberg/README.md": {
-    "mtime": 1779160382.3076785,
-    "ast_hash": "d1ffc2ac164d05abfd33373bc5bd45e6",
-    "semantic_hash": "d1ffc2ac164d05abfd33373bc5bd45e6"
-  },
-  "/Users/adityamishra/personal-important/Codeing stuff/adi-js/alpaca/Alpaca_trading_terminal/chart-compare-bloomberg/python/requirements.txt": {
-    "mtime": 1779159795.9357014,
-    "ast_hash": "1bc032cc039f1c8460209648bb34711f",
-    "semantic_hash": "1bc032cc039f1c8460209648bb34711f"
-  },
-  "/Users/adityamishra/personal-important/Codeing stuff/adi-js/alpaca/Alpaca_trading_terminal/chart-compare-bloomberg/src/renderer/index.html": {
-    "mtime": 1779161226.572896,
-    "ast_hash": "952a0b75422590ebfb81d3546676d34e",
-    "semantic_hash": "952a0b75422590ebfb81d3546676d34e"
   },
   "/Users/adityamishra/personal-important/Codeing stuff/adi-js/alpaca/Alpaca_trading_terminal/main-trading-terminal-go/CLAUDE.md": {
     "mtime": 1779090283.1183205,
@@ -480,23 +240,38 @@
     "semantic_hash": "ceabacbaf656a6ad87d409fc7449617b"
   },
   "/Users/adityamishra/personal-important/Codeing stuff/adi-js/alpaca/Alpaca_trading_terminal/main-trading-terminal-rust/README.md": {
-    "mtime": 1779086972.0779533,
-    "ast_hash": "9cab89925ac1159bc74538b874a0ba1b",
-    "semantic_hash": "9cab89925ac1159bc74538b874a0ba1b"
-  },
-  "/Users/adityamishra/personal-important/Codeing stuff/adi-js/alpaca/Alpaca_trading_terminal/ratatui-trading-terminal-rust/CLAUDE.md": {
-    "mtime": 1779090290.7767093,
-    "ast_hash": "64ff09c8064e9c9e45c70223887fcf79",
-    "semantic_hash": "64ff09c8064e9c9e45c70223887fcf79"
-  },
-  "/Users/adityamishra/personal-important/Codeing stuff/adi-js/alpaca/Alpaca_trading_terminal/ratatui-trading-terminal-rust/README.md": {
-    "mtime": 1778605346.6213245,
-    "ast_hash": "fd0e01f8601a6ac199740e60716fb656",
-    "semantic_hash": "fd0e01f8601a6ac199740e60716fb656"
+    "mtime": 1780740056.16918,
+    "ast_hash": "c664594071fe84893a169a82ed4157a8",
+    "semantic_hash": "c664594071fe84893a169a82ed4157a8"
   },
   "/Users/adityamishra/personal-important/Codeing stuff/adi-js/alpaca/Alpaca_trading_terminal/app_logo.png": {
     "mtime": 1779121623.844533,
     "ast_hash": "11141e638bca745c25ed346c108e33e0",
     "semantic_hash": "11141e638bca745c25ed346c108e33e0"
+  },
+  "/Users/adityamishra/personal-important/Codeing stuff/adi-js/alpaca/Alpaca_trading_terminal/website/script.js": {
+    "mtime": 1780737687.2796247,
+    "ast_hash": "cf9ef0445fe28d84f187b13137f59db2",
+    "semantic_hash": "cf9ef0445fe28d84f187b13137f59db2"
+  },
+  "/Users/adityamishra/personal-important/Codeing stuff/adi-js/alpaca/Alpaca_trading_terminal/.github/workflows/deploy-site.yml": {
+    "mtime": 1780739966.0332193,
+    "ast_hash": "a06168b717b149acbb0f5903d41503df",
+    "semantic_hash": "a06168b717b149acbb0f5903d41503df"
+  },
+  "/Users/adityamishra/personal-important/Codeing stuff/adi-js/alpaca/Alpaca_trading_terminal/website/index.html": {
+    "mtime": 1780737641.2286346,
+    "ast_hash": "342309234a9e28051969faba74e013f8",
+    "semantic_hash": "342309234a9e28051969faba74e013f8"
+  },
+  "/Users/adityamishra/personal-important/Codeing stuff/adi-js/alpaca/Alpaca_trading_terminal/website/assets/logo.png": {
+    "mtime": 1780736160.7614958,
+    "ast_hash": "11141e638bca745c25ed346c108e33e0",
+    "semantic_hash": "11141e638bca745c25ed346c108e33e0"
+  },
+  "/Users/adityamishra/personal-important/Codeing stuff/adi-js/alpaca/Alpaca_trading_terminal/website/assets/screenshot.png": {
+    "mtime": 1780738295.878432,
+    "ast_hash": "9e6dc7215076ddbbeecd1d5cdbf0b5a9",
+    "semantic_hash": "9e6dc7215076ddbbeecd1d5cdbf0b5a9"
   }
 }

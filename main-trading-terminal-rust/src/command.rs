@@ -27,6 +27,9 @@ pub enum Command {
     Compare(Vec<String>),
     GoTo(Page),
     Trade(TradeIntent),
+    /// `OPT <TICKER>` — jump to the Options desk and load that underlying's
+    /// chain. The actual load lives in `dispatch_command`.
+    Options(String),
     AddToWatchlist(String),
     /// Pop the credentials modal so the user can re-enter API key/secret +
     /// flip between paper and live. Mutation lives in `dispatch_command`;
@@ -109,6 +112,13 @@ pub fn parse(input: &str) -> Command {
         }
         "ORDERS" => Command::GoTo(Page::Orders),
         "ACT" | "ACTIVITY" => Command::GoTo(Page::Activity),
+        "OPT" | "OPTION" | "OPTIONS" => {
+            // Requires exactly one tickerish underlying.
+            match tokens.first().map(|t| t.to_ascii_uppercase()) {
+                Some(sym) if is_tickerish(&sym) && tokens.len() == 1 => Command::Options(sym),
+                _ => Command::Unknown(input.to_string()),
+            }
+        }
         "COMP" | "COMPARE" => {
             let syms: Vec<String> = tokens
                 .iter()
@@ -247,6 +257,19 @@ mod tests {
     #[test]
     fn watch_adds_to_watchlist() {
         assert_eq!(parse("watch tsla"), Command::AddToWatchlist("TSLA".into()));
+    }
+
+    #[test]
+    fn opt_jumps_to_options_desk() {
+        assert_eq!(parse("opt aapl"), Command::Options("AAPL".into()));
+        assert_eq!(parse("OPT nvda"), Command::Options("NVDA".into()));
+        assert_eq!(parse("options tsla"), Command::Options("TSLA".into()));
+    }
+
+    #[test]
+    fn opt_without_ticker_is_unknown() {
+        assert_eq!(parse("opt"), Command::Unknown("opt".into()));
+        assert_eq!(parse("opt aapl msft"), Command::Unknown("opt aapl msft".into()));
     }
 
     #[test]

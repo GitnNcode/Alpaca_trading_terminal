@@ -31,6 +31,10 @@ pub struct AppState {
     pub compare_range_idx: usize,
     /// Pinned tickers for the watchlist sidebar / ticker tape (Step 5).
     pub watchlist: Vec<String>,
+    /// Last underlying loaded on the Options desk (uppercased). Restored so the
+    /// chain is one keystroke away on relaunch; the chain itself loads lazily
+    /// when the Options tab is first opened.
+    pub last_underlying: String,
 }
 
 impl Default for AppState {
@@ -43,6 +47,7 @@ impl Default for AppState {
             compare_slots: Vec::new(),
             compare_range_idx: 1,
             watchlist: Vec::new(),
+            last_underlying: String::new(),
         }
     }
 }

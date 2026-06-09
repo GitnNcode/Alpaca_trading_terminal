@@ -13,9 +13,10 @@ use crate::chart;
 use crate::command::{self as cmd, Command, Page, Side as CmdSide};
 use crate::compare::{CompareState, COMPARE_RANGES};
 use crate::config;
+use crate::options::{self, OptionsState};
 use crate::persist;
 use crate::stocks::AssetCache;
-use crate::stream::{self, SubMsg, TickCache};
+use crate::stream::{self, SubMsg, TickCache, OPTIONS_STREAM_URL, STREAM_URL};
 use crate::terminal::TerminalState;
 use crate::theme;
 use crate::watchlist::WatchlistState;
@@ -47,6 +48,7 @@ const PALETTE_FUNCS: &[(&str, &str)] = &[
     ("SELL <QTY> <TICKER>", "Trade form, MARKET sell"),
     ("ORDERS",              "Trading Terminal / Orders"),
     ("ACT / ACTIVITY",      "Trading Terminal / Activity"),
+    ("OPT <TICKER>",        "Options desk — load chain for ticker"),
     ("WATCH <TICKER>",      "add to watchlist sidebar"),
     ("API CHANGE",          "re-enter API key / secret / paper-or-live"),
     ("HELP / ?",            "show this help overlay"),
@@ -57,6 +59,7 @@ pub enum Tab {
     Chart,
     Compare,
     Terminal,
+    Options,
 }
 
 /// Indicator toggles + their (default) periods. Matches the tview/ratatui
@@ -196,6 +199,13 @@ pub struct ChartApp {
     /// visited).
     pub terminal_primed: bool,
 
+    /// Options desk state (Chain / Positions / Orders sub-tabs).
+    pub options: OptionsState,
+    /// Lazy-prime flag for the Options tab — mirrors `terminal_primed`. The
+    /// first visit kicks the positions/orders refresh and (if an underlying
+    /// was restored) the chain load.
+    pub options_primed: bool,
+
     /// Last `AppState` we serialized to disk. We diff against this at the end
     /// of every frame to decide whether to save; cheap struct comparison.
     pub last_saved_state: persist::AppState,
@@ -216,6 +226,18 @@ pub struct ChartApp {
     /// Most recent subscription set we sent. Compared against the freshly
     /// computed set each frame so we only push when something changes.
     pub last_subscribed: std::collections::HashSet<String>,
+
+    /// Outbound channel to the SECOND stream thread — the options data feed
+    /// (`/v1beta1/indicative`). OCC-keyed quotes land in the same shared
+    /// `tick_cache` (no key collision with equity symbols). See docs/adr/0001.
+    pub options_stream_tx: std::sync::mpsc::Sender<SubMsg>,
+    /// Most recent OCC subscription set pushed to the options stream.
+    pub options_last_subscribed: std::collections::HashSet<String>,
+    /// Which stream currently holds the single allowed connection. Tracked so
+    /// we only send `SubMsg::SetActive` on an actual change (tab switch), and
+    /// always free the connection before claiming it. Stock starts active.
+    pub stock_stream_active: bool,
+    pub options_stream_active: bool,
     /// Live connection state of the WS, reported by the stream thread via
     /// `Msg::StreamStatus`. Surfaced in the top tab strip until the proper
     /// status bar lands (Tier 3 / Step ?).
@@ -279,6 +301,23 @@ impl ChartApp {
             tx.clone(),
             ctx.clone(),
             tick_cache.clone(),
+            STREAM_URL,
+            true, // this stream owns the `stream_connected` status flag
+            true, // subscribe to minute bars (the chart morphs its last candle)
+            true, // start active — default launch tab isn't Options
+        );
+        // Second stream: options data feed. Shares the tick cache (OCC keys
+        // don't collide with equity symbols) and does NOT report status so it
+        // can't flap the single `stream_connected` indicator.
+        let options_stream_tx = stream::spawn_stream(
+            client.clone(),
+            tx.clone(),
+            ctx.clone(),
+            tick_cache.clone(),
+            OPTIONS_STREAM_URL,
+            false, // don't report status — stock stream owns the indicator
+            false, // options indicative feed carries trades/quotes only, no bars
+            false, // start idle — only connects while the Options tab is open
         );
 
         // Restore the saved state from disk (or fall back to defaults if no
@@ -343,11 +382,24 @@ impl ChartApp {
             compare,
             terminal: TerminalState::new(),
             terminal_primed: false,
+            options: {
+                let mut o = OptionsState::new();
+                // Restore the last underlying so the chain is one keystroke
+                // away; the chain itself loads lazily on first Options visit.
+                o.underlying = saved.last_underlying.clone();
+                o.underlying_input = saved.last_underlying.clone();
+                o
+            },
+            options_primed: false,
             last_saved_state: saved.clone(),
             state_dirty_since: None,
             tick_cache,
             stream_tx,
             last_subscribed: std::collections::HashSet::new(),
+            options_stream_tx,
+            options_last_subscribed: std::collections::HashSet::new(),
+            stock_stream_active: true,
+            options_stream_active: false,
             stream_connected: false,
             watchlist: WatchlistState::from_saved(&saved.watchlist),
             command_input: String::new(),
@@ -396,6 +448,7 @@ impl ChartApp {
             compare_slots: self.compare.slots.iter().map(|s| s.symbol.clone()).collect(),
             compare_range_idx: self.compare.range_idx,
             watchlist: self.watchlist.symbols.clone(),
+            last_underlying: self.options.underlying.clone(),
         }
     }
 
@@ -451,6 +504,13 @@ impl ChartApp {
                     // manually once on the form.
                     self.terminal.form.kind = crate::terminal::OrderKind::Market;
                 }
+            }
+            Command::Options(sym) => {
+                self.current_tab = Tab::Options;
+                self.options.sub_tab = crate::options::SubTab::Chain;
+                self.options_primed = true; // we're loading now; skip re-prime
+                self.options.kick_chain_load(self.client.clone(), self.tx.clone(), ctx, sym);
+                self.options.refresh_account_data(self.client.clone(), self.tx.clone(), ctx);
             }
             Command::AddToWatchlist(sym) => {
                 self.watchlist.add(&sym);
@@ -511,12 +571,21 @@ impl ChartApp {
         // new key. Best-effort — if the thread has died the next launch
         // re-spawns cleanly.
         let _ = self.stream_tx.send(SubMsg::ReplaceClient(new_client.clone()));
+        // Same for the options data stream — it auths with the same key.
+        let _ = self.options_stream_tx.send(SubMsg::ReplaceClient(new_client.clone()));
         // Force a re-fetch of the asset universe (different account tiers
         // see different asset sets) and reset everything the Terminal tab
         // was holding so the next 10s tick repopulates from scratch.
         workers::spawn_assets(new_client.clone(), self.tx.clone(), ctx.clone());
         self.terminal = TerminalState::new();
         self.terminal_primed = false;
+        // Reset the Options desk too — keep the chosen underlying so the chain
+        // reloads under the new client on next visit, but drop stale data.
+        let keep_underlying = self.options.underlying.clone();
+        self.options = OptionsState::new();
+        self.options.underlying = keep_underlying.clone();
+        self.options.underlying_input = keep_underlying;
+        self.options_primed = false;
         // Bars from the old client are now meaningless — wipe and bump gen
         // so any in-flight response is filtered out by drain_messages.
         self.bars.clear();
@@ -969,6 +1038,52 @@ impl ChartApp {
             let _ = self.stream_tx.send(SubMsg::SetSubscriptions(want.clone()));
             self.last_subscribed = want;
         }
+
+        // Options data stream subscriptions — the displayed expiration's
+        // contracts ∪ held option positions, but only while the Options tab is
+        // actually open. Off-tab we send the empty set so the second WS stays
+        // quiet (bounded cost either way).
+        let mut opt_want: std::collections::HashSet<String> = std::collections::HashSet::new();
+        if self.current_tab == Tab::Options {
+            for sym in self.options.displayed_symbols() {
+                opt_want.insert(sym);
+            }
+            for p in &self.options.positions {
+                if !p.symbol.is_empty() {
+                    opt_want.insert(p.symbol.clone());
+                }
+            }
+        }
+        if opt_want != self.options_last_subscribed {
+            let _ = self
+                .options_stream_tx
+                .send(SubMsg::SetSubscriptions(opt_want.clone()));
+            self.options_last_subscribed = opt_want;
+        }
+
+        // Exactly one stream may hold the connection (Alpaca plan limit). The
+        // options feed owns it on the Options tab; the stock feed owns it
+        // everywhere else. Always DEACTIVATE the loser before ACTIVATing the
+        // winner so the slot is free before the other claims it (avoids a
+        // transient 406 "connection limit exceeded" during the handoff).
+        let want_options = self.current_tab == Tab::Options;
+        let want_stock = !want_options;
+        if !want_stock && self.stock_stream_active {
+            let _ = self.stream_tx.send(SubMsg::SetActive(false));
+            self.stock_stream_active = false;
+        }
+        if !want_options && self.options_stream_active {
+            let _ = self.options_stream_tx.send(SubMsg::SetActive(false));
+            self.options_stream_active = false;
+        }
+        if want_stock && !self.stock_stream_active {
+            let _ = self.stream_tx.send(SubMsg::SetActive(true));
+            self.stock_stream_active = true;
+        }
+        if want_options && !self.options_stream_active {
+            let _ = self.options_stream_tx.send(SubMsg::SetActive(true));
+            self.options_stream_active = true;
+        }
     }
 
     /// End-of-frame: if persistable state has drifted from what's on disk,
@@ -1166,6 +1281,98 @@ impl ChartApp {
                         }
                     }
                 }
+                // ---- Options desk fetches ----
+                Msg::OptionContracts { underlying, gen, result } => {
+                    // Stale guard: ignore a response for a prior underlying or
+                    // a superseded load generation.
+                    if gen != self.options.gen || underlying != self.options.underlying {
+                        continue;
+                    }
+                    match result {
+                        Ok(contracts) => {
+                            self.options.err.clear();
+                            self.options.on_contracts_loaded(contracts);
+                        }
+                        Err(e) => {
+                            self.options.loading = false;
+                            self.options.err = e.to_string();
+                        }
+                    }
+                }
+                Msg::OptionSnapshots { underlying, gen, result } => {
+                    if gen != self.options.gen || underlying != self.options.underlying {
+                        continue;
+                    }
+                    match result {
+                        Ok(snaps) => self.options.snapshots = snaps,
+                        // A snapshot failure is non-fatal — the chain skeleton
+                        // (contracts) still renders; quotes just stay blank
+                        // until the WS fills them in.
+                        Err(e) => self.options.err = e.to_string(),
+                    }
+                }
+                Msg::OptPositions(result) => {
+                    self.options.positions_loading = false;
+                    match result {
+                        Ok(v) => {
+                            // Options desk shows only option positions.
+                            self.options.positions =
+                                v.into_iter().filter(|p| p.asset_class == "us_option").collect();
+                            self.options.positions_err.clear();
+                        }
+                        Err(e) => self.options.positions_err = e.to_string(),
+                    }
+                }
+                Msg::OptOpenOrders(result) => {
+                    self.options.orders_loading = false;
+                    match result {
+                        Ok(v) => {
+                            let opts: Vec<_> =
+                                v.into_iter().filter(|o| o.asset_class == "us_option").collect();
+                            let live: std::collections::HashSet<_> =
+                                opts.iter().map(|o| o.id.clone()).collect();
+                            self.options.cancelling.retain(|id| live.contains(id));
+                            self.options.open_orders = opts;
+                            self.options.open_orders_err.clear();
+                        }
+                        Err(e) => self.options.open_orders_err = e.to_string(),
+                    }
+                }
+                Msg::OptOrderPlaced { req_summary, result } => {
+                    self.options.form.busy = false;
+                    match result {
+                        Ok(o) => {
+                            self.options.form.result = format!(
+                                "Placed {} — order id {} (status: {})",
+                                req_summary,
+                                &o.id[..o.id.len().min(8)],
+                                o.status
+                            );
+                            self.options.form.result_color = theme::GREEN;
+                            self.options.refresh_account_data(
+                                self.client.clone(),
+                                self.tx.clone(),
+                                ctx,
+                            );
+                        }
+                        Err(e) => {
+                            self.options.form.result =
+                                format!("Failed to place {}: {}", req_summary, e);
+                            self.options.form.result_color = theme::RED;
+                        }
+                    }
+                }
+                Msg::OptOrderCancelled { id, result } => {
+                    self.options.cancelling.remove(&id);
+                    if result.is_ok() {
+                        self.options.open_orders.retain(|o| o.id != id);
+                        self.options.refresh_account_data(
+                            self.client.clone(),
+                            self.tx.clone(),
+                            ctx,
+                        );
+                    }
+                }
             }
         }
     }
@@ -1266,6 +1473,32 @@ impl EApp for ChartApp {
             ctx.request_repaint_after(std::time::Duration::from_secs(1));
         }
 
+        // Same lazy-prime + 10s auto-refresh for the Options desk. First visit
+        // fires the positions/orders refresh and — if an underlying was
+        // restored from disk — kicks the chain load. Nothing runs until the
+        // user actually opens the tab.
+        if self.current_tab == Tab::Options {
+            if !self.options_primed {
+                self.options_primed = true;
+                self.options
+                    .refresh_account_data(self.client.clone(), self.tx.clone(), ctx);
+                if !self.options.underlying.is_empty() && self.options.contracts.is_empty() {
+                    let u = self.options.underlying.clone();
+                    self.options
+                        .kick_chain_load(self.client.clone(), self.tx.clone(), ctx, u);
+                }
+            } else if self
+                .options
+                .last_refresh
+                .map(|t| t.elapsed() >= std::time::Duration::from_secs(10))
+                .unwrap_or(true)
+            {
+                self.options
+                    .refresh_account_data(self.client.clone(), self.tx.clone(), ctx);
+            }
+            ctx.request_repaint_after(std::time::Duration::from_secs(1));
+        }
+
         // Watchlist sidebar — mounted across every tab so the user can
         // glance at pinned tickers without context-switching. Click a row
         // → load that symbol on the Chart tab. The bottom ticker tape is
@@ -1340,6 +1573,18 @@ impl EApp for ChartApp {
                     );
                 });
             }
+            Tab::Options => {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    options::render(
+                        &mut self.options,
+                        self.client.clone(),
+                        self.tx.clone(),
+                        &self.assets,
+                        &self.tick_cache,
+                        ui,
+                    );
+                });
+            }
         }
 
         // Push the latest desired stream subscriptions to the WS thread if
@@ -1369,6 +1614,7 @@ impl ChartApp {
                 (Tab::Terminal, "Trading Terminal"),
                 (Tab::Chart, "Chart"),
                 (Tab::Compare, "Compare"),
+                (Tab::Options, "Options"),
             ] {
                 let active = self.current_tab == tab;
                 let text = format!("  {}  ", label);
