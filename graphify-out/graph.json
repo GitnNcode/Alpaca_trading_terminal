@@ -47,157 +47,201 @@
   },
   "nodes": [
     {
-      "label": "README.md",
-      "file_type": "document",
-      "source_file": "main-trading-terminal-rust/README.md",
-      "source_location": "L1",
-      "id": "main_trading_terminal_rust_readme",
-      "community": 4,
-      "norm_label": "readme.md"
-    },
-    {
-      "label": "Alpaca Trading Terminal \u2014 Rust + egui",
-      "file_type": "document",
-      "source_file": "main-trading-terminal-rust/README.md",
-      "source_location": "L1",
-      "id": "main_trading_terminal_rust_readme_alpaca_trading_terminal_rust_egui",
-      "community": 4,
-      "norm_label": "alpaca trading terminal \u2014 rust + egui"
-    },
-    {
-      "label": "Tabs",
-      "file_type": "document",
-      "source_file": "main-trading-terminal-rust/README.md",
-      "source_location": "L12",
-      "id": "main_trading_terminal_rust_readme_tabs",
-      "community": 4,
-      "norm_label": "tabs"
-    },
-    {
-      "label": "Across every tab",
-      "file_type": "document",
-      "source_file": "main-trading-terminal-rust/README.md",
-      "source_location": "L42",
-      "id": "main_trading_terminal_rust_readme_across_every_tab",
-      "community": 4,
-      "norm_label": "across every tab"
-    },
-    {
-      "label": "Indicators (Chart tab)",
-      "file_type": "document",
-      "source_file": "main-trading-terminal-rust/README.md",
-      "source_location": "L58",
-      "id": "main_trading_terminal_rust_readme_indicators_chart_tab",
-      "community": 4,
-      "norm_label": "indicators (chart tab)"
-    },
-    {
-      "label": "Download",
-      "file_type": "document",
-      "source_file": "main-trading-terminal-rust/README.md",
-      "source_location": "L73",
-      "id": "main_trading_terminal_rust_readme_download",
-      "community": 4,
-      "norm_label": "download"
-    },
-    {
-      "label": "Run",
-      "file_type": "document",
-      "source_file": "main-trading-terminal-rust/README.md",
-      "source_location": "L87",
-      "id": "main_trading_terminal_rust_readme_run",
-      "community": 4,
-      "norm_label": "run"
-    },
-    {
-      "label": "Build from source",
-      "file_type": "document",
-      "source_file": "main-trading-terminal-rust/README.md",
-      "source_location": "L99",
-      "id": "main_trading_terminal_rust_readme_build_from_source",
-      "community": 4,
-      "norm_label": "build from source"
-    },
-    {
-      "label": "Tests",
-      "file_type": "document",
-      "source_file": "main-trading-terminal-rust/README.md",
-      "source_location": "L122",
-      "id": "main_trading_terminal_rust_readme_tests",
-      "community": 4,
-      "norm_label": "tests"
-    },
-    {
-      "label": "Project layout",
-      "file_type": "document",
-      "source_file": "main-trading-terminal-rust/README.md",
-      "source_location": "L129",
-      "id": "main_trading_terminal_rust_readme_project_layout",
-      "community": 4,
-      "norm_label": "project layout"
-    },
-    {
-      "label": "History",
-      "file_type": "document",
-      "source_file": "main-trading-terminal-rust/README.md",
-      "source_location": "L156",
-      "id": "main_trading_terminal_rust_readme_history",
-      "community": 4,
-      "norm_label": "history"
-    },
-    {
       "label": "CLAUDE.md",
       "file_type": "document",
       "source_file": "main-trading-terminal-rust/CLAUDE.md",
       "source_location": "L1",
+      "id": "main_trading_terminal_rust_claude",
       "community": 4,
-      "norm_label": "claude.md",
-      "id": "main_trading_terminal_rust_claude"
+      "norm_label": "claude.md"
     },
     {
       "label": "Chart + Compare + Terminal + Options + Crypto GUI (Rust + egui)",
       "file_type": "document",
       "source_file": "main-trading-terminal-rust/CLAUDE.md",
       "source_location": "L1",
+      "id": "main_trading_terminal_rust_claude_chart_compare_terminal_options_crypto_gui_rust_egui",
       "community": 4,
-      "norm_label": "chart + compare + terminal + options + crypto gui (rust + egui)",
-      "id": "main_trading_terminal_rust_claude_chart_compare_terminal_options_crypto_gui_rust_egui"
+      "norm_label": "chart + compare + terminal + options + crypto gui (rust + egui)"
     },
     {
       "label": "Stack",
       "file_type": "document",
       "source_file": "main-trading-terminal-rust/CLAUDE.md",
       "source_location": "L10",
+      "id": "main_trading_terminal_rust_claude_stack",
       "community": 4,
-      "norm_label": "stack",
-      "id": "main_trading_terminal_rust_claude_stack"
+      "norm_label": "stack"
     },
     {
       "label": "Commands (run from this directory)",
       "file_type": "document",
       "source_file": "main-trading-terminal-rust/CLAUDE.md",
       "source_location": "L15",
+      "id": "main_trading_terminal_rust_claude_commands_run_from_this_directory",
       "community": 4,
-      "norm_label": "commands (run from this directory)",
-      "id": "main_trading_terminal_rust_claude_commands_run_from_this_directory"
+      "norm_label": "commands (run from this directory)"
     },
     {
       "label": "Architecture rules",
       "file_type": "document",
       "source_file": "main-trading-terminal-rust/CLAUDE.md",
-      "source_location": "L22",
+      "source_location": "L23",
+      "id": "main_trading_terminal_rust_claude_architecture_rules",
       "community": 4,
-      "norm_label": "architecture rules",
-      "id": "main_trading_terminal_rust_claude_architecture_rules"
+      "norm_label": "architecture rules"
     },
     {
       "label": "Don't",
       "file_type": "document",
       "source_file": "main-trading-terminal-rust/CLAUDE.md",
-      "source_location": "L53",
+      "source_location": "L54",
+      "id": "main_trading_terminal_rust_claude_don_t",
       "community": 4,
-      "norm_label": "don't",
-      "id": "main_trading_terminal_rust_claude_don_t"
+      "norm_label": "don't"
+    },
+    {
+      "label": "make-ico.sh",
+      "file_type": "code",
+      "source_file": "main-trading-terminal-rust/assets/make-ico.sh",
+      "source_location": "L1",
+      "metadata": {
+        "language": "bash",
+        "kind": "file"
+      },
+      "id": "assets_make_ico",
+      "community": 46,
+      "norm_label": "make-ico.sh"
+    },
+    {
+      "label": "make-ico.sh script",
+      "file_type": "code",
+      "source_file": "main-trading-terminal-rust/assets/make-ico.sh",
+      "source_location": "L1",
+      "metadata": {
+        "language": "bash",
+        "kind": "bash_entrypoint"
+      },
+      "id": "users_adityamishra_personal_important_codeing_stuff_adi_js_alpaca_alpaca_trading_terminal_main_trading_terminal_rust_assets_make_ico_sh__entry",
+      "community": 46,
+      "norm_label": "make-ico.sh script"
+    },
+    {
+      "label": "build.rs",
+      "file_type": "code",
+      "source_file": "main-trading-terminal-rust/build.rs",
+      "source_location": "L1",
+      "id": "main_trading_terminal_rust_build",
+      "community": 20,
+      "norm_label": "build.rs"
+    },
+    {
+      "label": "main()",
+      "file_type": "code",
+      "source_file": "main-trading-terminal-rust/build.rs",
+      "source_location": "L15",
+      "id": "main_trading_terminal_rust_build_main",
+      "community": 20,
+      "norm_label": "main()"
+    },
+    {
+      "label": "README.md",
+      "file_type": "document",
+      "source_file": "main-trading-terminal-rust/README.md",
+      "source_location": "L1",
+      "community": 4,
+      "norm_label": "readme.md",
+      "id": "main_trading_terminal_rust_readme"
+    },
+    {
+      "label": "Alpaca Trading Terminal \u2014 Rust + egui",
+      "file_type": "document",
+      "source_file": "main-trading-terminal-rust/README.md",
+      "source_location": "L1",
+      "community": 4,
+      "norm_label": "alpaca trading terminal \u2014 rust + egui",
+      "id": "main_trading_terminal_rust_readme_alpaca_trading_terminal_rust_egui"
+    },
+    {
+      "label": "Tabs",
+      "file_type": "document",
+      "source_file": "main-trading-terminal-rust/README.md",
+      "source_location": "L12",
+      "community": 4,
+      "norm_label": "tabs",
+      "id": "main_trading_terminal_rust_readme_tabs"
+    },
+    {
+      "label": "Across every tab",
+      "file_type": "document",
+      "source_file": "main-trading-terminal-rust/README.md",
+      "source_location": "L42",
+      "community": 4,
+      "norm_label": "across every tab",
+      "id": "main_trading_terminal_rust_readme_across_every_tab"
+    },
+    {
+      "label": "Indicators (Chart tab)",
+      "file_type": "document",
+      "source_file": "main-trading-terminal-rust/README.md",
+      "source_location": "L58",
+      "community": 4,
+      "norm_label": "indicators (chart tab)",
+      "id": "main_trading_terminal_rust_readme_indicators_chart_tab"
+    },
+    {
+      "label": "Download",
+      "file_type": "document",
+      "source_file": "main-trading-terminal-rust/README.md",
+      "source_location": "L73",
+      "community": 4,
+      "norm_label": "download",
+      "id": "main_trading_terminal_rust_readme_download"
+    },
+    {
+      "label": "Run",
+      "file_type": "document",
+      "source_file": "main-trading-terminal-rust/README.md",
+      "source_location": "L87",
+      "community": 4,
+      "norm_label": "run",
+      "id": "main_trading_terminal_rust_readme_run"
+    },
+    {
+      "label": "Build from source",
+      "file_type": "document",
+      "source_file": "main-trading-terminal-rust/README.md",
+      "source_location": "L99",
+      "community": 4,
+      "norm_label": "build from source",
+      "id": "main_trading_terminal_rust_readme_build_from_source"
+    },
+    {
+      "label": "Tests",
+      "file_type": "document",
+      "source_file": "main-trading-terminal-rust/README.md",
+      "source_location": "L122",
+      "community": 4,
+      "norm_label": "tests",
+      "id": "main_trading_terminal_rust_readme_tests"
+    },
+    {
+      "label": "Project layout",
+      "file_type": "document",
+      "source_file": "main-trading-terminal-rust/README.md",
+      "source_location": "L129",
+      "community": 4,
+      "norm_label": "project layout",
+      "id": "main_trading_terminal_rust_readme_project_layout"
+    },
+    {
+      "label": "History",
+      "file_type": "document",
+      "source_file": "main-trading-terminal-rust/README.md",
+      "source_location": "L156",
+      "community": 4,
+      "norm_label": "history",
+      "id": "main_trading_terminal_rust_readme_history"
     },
     {
       "label": "CONTEXT.md",
@@ -1266,7 +1310,7 @@
       "file_type": "code",
       "source_file": "main-trading-terminal-rust/src/app.rs",
       "source_location": "L510",
-      "community": 5,
+      "community": 20,
       "norm_label": "command",
       "id": "command"
     },
@@ -8349,7 +8393,7 @@
       "file_type": "code",
       "source_file": "main-trading-terminal-go/braille.go",
       "source_location": "L1",
-      "community": 4,
+      "community": 1,
       "norm_label": "braille.go",
       "id": "main_trading_terminal_go_braille"
     },
@@ -8358,7 +8402,7 @@
       "file_type": "code",
       "source_file": "main-trading-terminal-go/braille.go",
       "source_location": "L15",
-      "community": 4,
+      "community": 1,
       "norm_label": "braillelayer",
       "id": "main_trading_terminal_go_braillelayer"
     },
@@ -8376,7 +8420,7 @@
       "file_type": "code",
       "source_file": "main-trading-terminal-go/braille.go",
       "source_location": "L33",
-      "community": 4,
+      "community": 1,
       "norm_label": "braillebit()",
       "id": "main_trading_terminal_go_braille_braillebit"
     },
@@ -8385,7 +8429,7 @@
       "file_type": "code",
       "source_file": "main-trading-terminal-go/braille.go",
       "source_location": "L42",
-      "community": 4,
+      "community": 1,
       "norm_label": ".plot()",
       "id": "main_trading_terminal_go_braillelayer_plot"
     },
@@ -8394,7 +8438,7 @@
       "file_type": "code",
       "source_file": "main-trading-terminal-go/braille.go",
       "source_location": "L55",
-      "community": 4,
+      "community": 1,
       "norm_label": ".line()",
       "id": "main_trading_terminal_go_braillelayer_line"
     },
@@ -8403,7 +8447,7 @@
       "file_type": "code",
       "source_file": "main-trading-terminal-go/braille.go",
       "source_location": "L89",
-      "community": 4,
+      "community": 1,
       "norm_label": ".thickline()",
       "id": "main_trading_terminal_go_braillelayer_thickline"
     },
@@ -8412,7 +8456,7 @@
       "file_type": "code",
       "source_file": "main-trading-terminal-go/braille.go",
       "source_location": "L126",
-      "community": 4,
+      "community": 1,
       "norm_label": ".renderat()",
       "id": "main_trading_terminal_go_braillelayer_renderat"
     },
@@ -8421,7 +8465,7 @@
       "file_type": "code",
       "source_file": "main-trading-terminal-go/braille.go",
       "source_location": "L126",
-      "community": 4,
+      "community": 1,
       "norm_label": "screen",
       "id": "main_trading_terminal_go_braille_go_screen"
     },
@@ -8430,7 +8474,7 @@
       "file_type": "code",
       "source_file": "main-trading-terminal-go/braille.go",
       "source_location": "L126",
-      "community": 4,
+      "community": 1,
       "norm_label": "style",
       "id": "main_trading_terminal_go_braille_go_style"
     },
@@ -8448,7 +8492,7 @@
       "file_type": "code",
       "source_file": "main-trading-terminal-go/chart.go",
       "source_location": "L1",
-      "community": 1,
+      "community": 17,
       "norm_label": "chart.go",
       "id": "main_trading_terminal_go_chart"
     },
@@ -8475,7 +8519,7 @@
       "file_type": "code",
       "source_file": "main-trading-terminal-go/chart.go",
       "source_location": "L46",
-      "community": 1,
+      "community": 17,
       "norm_label": "charttimeframe",
       "id": "main_trading_terminal_go_charttimeframe"
     },
@@ -8484,7 +8528,7 @@
       "file_type": "code",
       "source_file": "main-trading-terminal-go/chart.go",
       "source_location": "L86",
-      "community": 1,
+      "community": 17,
       "norm_label": "chartzoom",
       "id": "main_trading_terminal_go_chartzoom"
     },
@@ -8520,7 +8564,7 @@
       "file_type": "code",
       "source_file": "main-trading-terminal-go/chart.go",
       "source_location": "L115",
-      "community": 1,
+      "community": 17,
       "norm_label": "bar",
       "id": "main_trading_terminal_go_chart_go_bar"
     },
@@ -8529,7 +8573,7 @@
       "file_type": "code",
       "source_file": "main-trading-terminal-go/chart.go",
       "source_location": "L159",
-      "community": 1,
+      "community": 17,
       "norm_label": ".draw()",
       "id": "main_trading_terminal_go_chartcanvas_draw"
     },
@@ -8538,7 +8582,7 @@
       "file_type": "code",
       "source_file": "main-trading-terminal-go/chart.go",
       "source_location": "L159",
-      "community": 1,
+      "community": 17,
       "norm_label": "screen",
       "id": "main_trading_terminal_go_chart_go_screen"
     },
@@ -8547,7 +8591,7 @@
       "file_type": "code",
       "source_file": "main-trading-terminal-go/chart.go",
       "source_location": "L493",
-      "community": 1,
+      "community": 17,
       "norm_label": "drawstring()",
       "id": "main_trading_terminal_go_chart_drawstring"
     },
@@ -8556,7 +8600,7 @@
       "file_type": "code",
       "source_file": "main-trading-terminal-go/chart.go",
       "source_location": "L493",
-      "community": 1,
+      "community": 17,
       "norm_label": "color",
       "id": "main_trading_terminal_go_chart_go_color"
     },
@@ -8565,7 +8609,7 @@
       "file_type": "code",
       "source_file": "main-trading-terminal-go/chart.go",
       "source_location": "L507",
-      "community": 1,
+      "community": 17,
       "norm_label": "aggregatebars()",
       "id": "main_trading_terminal_go_chart_aggregatebars"
     },
@@ -8718,7 +8762,7 @@
       "file_type": "code",
       "source_file": "main-trading-terminal-go/chart.go",
       "source_location": "L1106",
-      "community": 1,
+      "community": 17,
       "norm_label": ".updatechartstats()",
       "id": "main_trading_terminal_go_termapp_updatechartstats"
     },
@@ -8727,7 +8771,7 @@
       "file_type": "code",
       "source_file": "main-trading-terminal-go/chart.go",
       "source_location": "L1141",
-      "community": 1,
+      "community": 17,
       "norm_label": "fmtvolume()",
       "id": "main_trading_terminal_go_chart_fmtvolume"
     },
@@ -10789,116 +10833,6 @@
       "relation": "references",
       "confidence": "EXTRACTED",
       "confidence_score": 1.0,
-      "source_file": "main-trading-terminal-rust/README.md",
-      "source_location": null,
-      "weight": 1.0,
-      "source": "main_trading_terminal_rust_readme",
-      "target": "main_trading_terminal_go_claude"
-    },
-    {
-      "relation": "contains",
-      "confidence": "EXTRACTED",
-      "source_file": "main-trading-terminal-rust/README.md",
-      "source_location": "L1",
-      "weight": 1.0,
-      "source": "main_trading_terminal_rust_readme",
-      "target": "main_trading_terminal_rust_readme_alpaca_trading_terminal_rust_egui",
-      "confidence_score": 1.0
-    },
-    {
-      "relation": "contains",
-      "confidence": "EXTRACTED",
-      "source_file": "main-trading-terminal-rust/README.md",
-      "source_location": "L42",
-      "weight": 1.0,
-      "source": "main_trading_terminal_rust_readme_alpaca_trading_terminal_rust_egui",
-      "target": "main_trading_terminal_rust_readme_across_every_tab",
-      "confidence_score": 1.0
-    },
-    {
-      "relation": "contains",
-      "confidence": "EXTRACTED",
-      "source_file": "main-trading-terminal-rust/README.md",
-      "source_location": "L99",
-      "weight": 1.0,
-      "source": "main_trading_terminal_rust_readme_alpaca_trading_terminal_rust_egui",
-      "target": "main_trading_terminal_rust_readme_build_from_source",
-      "confidence_score": 1.0
-    },
-    {
-      "relation": "contains",
-      "confidence": "EXTRACTED",
-      "source_file": "main-trading-terminal-rust/README.md",
-      "source_location": "L73",
-      "weight": 1.0,
-      "source": "main_trading_terminal_rust_readme_alpaca_trading_terminal_rust_egui",
-      "target": "main_trading_terminal_rust_readme_download",
-      "confidence_score": 1.0
-    },
-    {
-      "relation": "contains",
-      "confidence": "EXTRACTED",
-      "source_file": "main-trading-terminal-rust/README.md",
-      "source_location": "L156",
-      "weight": 1.0,
-      "source": "main_trading_terminal_rust_readme_alpaca_trading_terminal_rust_egui",
-      "target": "main_trading_terminal_rust_readme_history",
-      "confidence_score": 1.0
-    },
-    {
-      "relation": "contains",
-      "confidence": "EXTRACTED",
-      "source_file": "main-trading-terminal-rust/README.md",
-      "source_location": "L58",
-      "weight": 1.0,
-      "source": "main_trading_terminal_rust_readme_alpaca_trading_terminal_rust_egui",
-      "target": "main_trading_terminal_rust_readme_indicators_chart_tab",
-      "confidence_score": 1.0
-    },
-    {
-      "relation": "contains",
-      "confidence": "EXTRACTED",
-      "source_file": "main-trading-terminal-rust/README.md",
-      "source_location": "L129",
-      "weight": 1.0,
-      "source": "main_trading_terminal_rust_readme_alpaca_trading_terminal_rust_egui",
-      "target": "main_trading_terminal_rust_readme_project_layout",
-      "confidence_score": 1.0
-    },
-    {
-      "relation": "contains",
-      "confidence": "EXTRACTED",
-      "source_file": "main-trading-terminal-rust/README.md",
-      "source_location": "L87",
-      "weight": 1.0,
-      "source": "main_trading_terminal_rust_readme_alpaca_trading_terminal_rust_egui",
-      "target": "main_trading_terminal_rust_readme_run",
-      "confidence_score": 1.0
-    },
-    {
-      "relation": "contains",
-      "confidence": "EXTRACTED",
-      "source_file": "main-trading-terminal-rust/README.md",
-      "source_location": "L12",
-      "weight": 1.0,
-      "source": "main_trading_terminal_rust_readme_alpaca_trading_terminal_rust_egui",
-      "target": "main_trading_terminal_rust_readme_tabs",
-      "confidence_score": 1.0
-    },
-    {
-      "relation": "contains",
-      "confidence": "EXTRACTED",
-      "source_file": "main-trading-terminal-rust/README.md",
-      "source_location": "L122",
-      "weight": 1.0,
-      "source": "main_trading_terminal_rust_readme_alpaca_trading_terminal_rust_egui",
-      "target": "main_trading_terminal_rust_readme_tests",
-      "confidence_score": 1.0
-    },
-    {
-      "relation": "references",
-      "confidence": "EXTRACTED",
-      "confidence_score": 1.0,
       "source_file": "main-trading-terminal-rust/CLAUDE.md",
       "source_location": null,
       "weight": 1.0,
@@ -10954,6 +10888,158 @@
       "confidence_score": 1.0,
       "source": "main_trading_terminal_rust_claude_chart_compare_terminal_options_crypto_gui_rust_egui",
       "target": "main_trading_terminal_rust_claude_stack"
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "main-trading-terminal-rust/assets/make-ico.sh",
+      "source_location": "L1",
+      "weight": 1.0,
+      "source": "assets_make_ico",
+      "target": "users_adityamishra_personal_important_codeing_stuff_adi_js_alpaca_alpaca_trading_terminal_main_trading_terminal_rust_assets_make_ico_sh__entry",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "imports_from",
+      "confidence": "EXTRACTED",
+      "source_file": "main-trading-terminal-rust/build.rs",
+      "source_location": "L13",
+      "weight": 1.0,
+      "context": "import",
+      "source": "main_trading_terminal_rust_build",
+      "target": "command",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "main-trading-terminal-rust/build.rs",
+      "source_location": "L15",
+      "weight": 1.0,
+      "source": "main_trading_terminal_rust_build",
+      "target": "main_trading_terminal_rust_build_main",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "imports_from",
+      "confidence": "EXTRACTED",
+      "source_file": "main-trading-terminal-rust/build.rs",
+      "source_location": "L12",
+      "weight": 1.0,
+      "context": "import",
+      "source": "main_trading_terminal_rust_build",
+      "target": "pathbuf",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "main-trading-terminal-rust/README.md",
+      "source_location": null,
+      "weight": 1.0,
+      "source": "main_trading_terminal_rust_readme",
+      "target": "main_trading_terminal_go_claude"
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "main-trading-terminal-rust/README.md",
+      "source_location": "L1",
+      "weight": 1.0,
+      "confidence_score": 1.0,
+      "source": "main_trading_terminal_rust_readme",
+      "target": "main_trading_terminal_rust_readme_alpaca_trading_terminal_rust_egui"
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "main-trading-terminal-rust/README.md",
+      "source_location": "L42",
+      "weight": 1.0,
+      "confidence_score": 1.0,
+      "source": "main_trading_terminal_rust_readme_alpaca_trading_terminal_rust_egui",
+      "target": "main_trading_terminal_rust_readme_across_every_tab"
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "main-trading-terminal-rust/README.md",
+      "source_location": "L99",
+      "weight": 1.0,
+      "confidence_score": 1.0,
+      "source": "main_trading_terminal_rust_readme_alpaca_trading_terminal_rust_egui",
+      "target": "main_trading_terminal_rust_readme_build_from_source"
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "main-trading-terminal-rust/README.md",
+      "source_location": "L73",
+      "weight": 1.0,
+      "confidence_score": 1.0,
+      "source": "main_trading_terminal_rust_readme_alpaca_trading_terminal_rust_egui",
+      "target": "main_trading_terminal_rust_readme_download"
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "main-trading-terminal-rust/README.md",
+      "source_location": "L156",
+      "weight": 1.0,
+      "confidence_score": 1.0,
+      "source": "main_trading_terminal_rust_readme_alpaca_trading_terminal_rust_egui",
+      "target": "main_trading_terminal_rust_readme_history"
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "main-trading-terminal-rust/README.md",
+      "source_location": "L58",
+      "weight": 1.0,
+      "confidence_score": 1.0,
+      "source": "main_trading_terminal_rust_readme_alpaca_trading_terminal_rust_egui",
+      "target": "main_trading_terminal_rust_readme_indicators_chart_tab"
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "main-trading-terminal-rust/README.md",
+      "source_location": "L129",
+      "weight": 1.0,
+      "confidence_score": 1.0,
+      "source": "main_trading_terminal_rust_readme_alpaca_trading_terminal_rust_egui",
+      "target": "main_trading_terminal_rust_readme_project_layout"
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "main-trading-terminal-rust/README.md",
+      "source_location": "L87",
+      "weight": 1.0,
+      "confidence_score": 1.0,
+      "source": "main_trading_terminal_rust_readme_alpaca_trading_terminal_rust_egui",
+      "target": "main_trading_terminal_rust_readme_run"
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "main-trading-terminal-rust/README.md",
+      "source_location": "L12",
+      "weight": 1.0,
+      "confidence_score": 1.0,
+      "source": "main_trading_terminal_rust_readme_alpaca_trading_terminal_rust_egui",
+      "target": "main_trading_terminal_rust_readme_tabs"
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "main-trading-terminal-rust/README.md",
+      "source_location": "L122",
+      "weight": 1.0,
+      "confidence_score": 1.0,
+      "source": "main_trading_terminal_rust_readme_alpaca_trading_terminal_rust_egui",
+      "target": "main_trading_terminal_rust_readme_tests"
     },
     {
       "relation": "contains",
@@ -42280,5 +42366,5 @@
       "source_file": ".github/workflows/deploy-site.yml"
     }
   ],
-  "built_at_commit": "035fe9be9d113327b06650e05679ad41a1bda217"
+  "built_at_commit": "a1d63be4aad26e42ee3d360c04c3ebb5583e9ace"
 }

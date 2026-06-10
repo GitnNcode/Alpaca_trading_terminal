@@ -1,16 +1,16 @@
 # Graph Report - Alpaca_trading_terminal  (2026-06-10)
 
 ## Corpus Check
-- 55 files · ~197,699 words
+- 57 files · ~198,354 words
 - Verdict: corpus is large enough that graph structure adds value.
 
 ## Summary
-- 1177 nodes · 2937 edges · 46 communities (41 shown, 5 thin omitted)
+- 1181 nodes · 2941 edges · 47 communities (41 shown, 6 thin omitted)
 - Extraction: 95% EXTRACTED · 5% INFERRED · 0% AMBIGUOUS · INFERRED: 146 edges (avg confidence: 0.81)
 - Token cost: 0 input · 0 output
 
 ## Graph Freshness
-- Built from commit: `035fe9be`
+- Built from commit: `a1d63be4`
 - Run `git rev-parse HEAD` and compare to check if the graph is stale.
 - Run `graphify update .` after code changes (no API cost).
 
@@ -59,6 +59,7 @@
 - [[_COMMUNITY_Community 43|Community 43]]
 - [[_COMMUNITY_Community 44|Community 44]]
 - [[_COMMUNITY_Community 45|Community 45]]
+- [[_COMMUNITY_Community 46|Community 46]]
 
 ## God Nodes (most connected - your core abstractions)
 1. `ChartApp` - 45 edges
@@ -85,14 +86,14 @@
   backtest-terminal-go/markov_test.go → main-trading-terminal-go/braille.go
 
 ## Import Cycles
+- 1-file cycle: `main-trading-terminal-rust/src/app.rs -> main-trading-terminal-rust/src/app.rs`
+- 1-file cycle: `main-trading-terminal-rust/src/persist.rs -> main-trading-terminal-rust/src/persist.rs`
 - 1-file cycle: `main-trading-terminal-rust/src/api.rs -> main-trading-terminal-rust/src/api.rs`
 - 1-file cycle: `main-trading-terminal-rust/src/stream.rs -> main-trading-terminal-rust/src/stream.rs`
-- 1-file cycle: `main-trading-terminal-rust/src/app.rs -> main-trading-terminal-rust/src/app.rs`
 - 1-file cycle: `main-trading-terminal-rust/src/chart.rs -> main-trading-terminal-rust/src/chart.rs`
 - 1-file cycle: `main-trading-terminal-rust/src/compare.rs -> main-trading-terminal-rust/src/compare.rs`
 - 1-file cycle: `main-trading-terminal-rust/src/crypto.rs -> main-trading-terminal-rust/src/crypto.rs`
 - 1-file cycle: `main-trading-terminal-rust/src/options.rs -> main-trading-terminal-rust/src/options.rs`
-- 1-file cycle: `main-trading-terminal-rust/src/persist.rs -> main-trading-terminal-rust/src/persist.rs`
 - 1-file cycle: `main-trading-terminal-rust/src/terminal.rs -> main-trading-terminal-rust/src/terminal.rs`
 - 1-file cycle: `main-trading-terminal-rust/src/watchlist.rs -> main-trading-terminal-rust/src/watchlist.rs`
 - 1-file cycle: `main-trading-terminal-rust/src/workers.rs -> main-trading-terminal-rust/src/workers.rs`
@@ -106,7 +107,7 @@
 - **Three-tab egui terminal workspaces** — readme_chart_tab, readme_compare_tab, readme_trading_terminal_tab, readme_alpaca_egui_app [EXTRACTED 1.00]
 - **CI builds Linux binary then publishes site to GitHub Pages** — deploy_site_build_linux, deploy_site_deploy, deploy_site_linux_binary_artifact [EXTRACTED 1.00]
 
-## Communities (46 total, 5 thin omitted)
+## Communities (47 total, 6 thin omitted)
 
 ### Community 0 - "Rust Alpaca API Models"
 Cohesion: 0.08
@@ -114,7 +115,7 @@ Nodes (69): Account, Activity, FillSide, AlpacaClient, Arc, AssetCache, Bar, Col
 
 ### Community 1 - "Go Chart Rendering"
 Cohesion: 0.10
-Nodes (62): newBrailleLayer(), aggregateBars(), computeEMA(), drawString(), fmtVolume(), Bar, Color, Screen (+54 more)
+Nodes (58): brailleBit(), Screen, Style, newBrailleLayer(), brailleLayer, computeEMA(), approxEq(), contains() (+50 more)
 
 ### Community 2 - "Rust App State & Client"
 Cohesion: 0.09
@@ -125,12 +126,12 @@ Cohesion: 0.08
 Nodes (47): Agent, Credentials, D, DateTime, Error, HashMap, Option, Result (+39 more)
 
 ### Community 4 - "Cross-App Feature Concepts"
-Cohesion: 0.06
-Nodes (32): Backtest Terminal (Go + tview), Backtest Regime/Strategy Engine, Release Binaries End-User README.txt, Alpaca Trading Terminal (root project), No Go Workspace (independent modules), Tracked Rust target/ Dirs Gotcha, Shared Credentials File (alpaca-tui/credentials.json), Shared trades.csv Format (+24 more)
+Cohesion: 0.08
+Nodes (28): Backtest Terminal (Go + tview), Backtest Regime/Strategy Engine, Release Binaries End-User README.txt, Alpaca Trading Terminal (root project), No Go Workspace (independent modules), Tracked Rust target/ Dirs Gotcha, Shared Credentials File (alpaca-tui/credentials.json), Shared trades.csv Format (+20 more)
 
 ### Community 5 - "Rust Compare Tab State"
 Cohesion: 0.08
-Nodes (34): AppState, Cell, Command, CompareState, CryptoState, EApp, Frame, AlpacaClient (+26 more)
+Nodes (33): AppState, Cell, CompareState, CryptoState, EApp, Frame, AlpacaClient, Arc (+25 more)
 
 ### Community 6 - "Go tview UI Widgets"
 Cohesion: 0.07
@@ -177,8 +178,8 @@ Cohesion: 0.16
 Nodes (17): finite(), fitHMMGaussian(), gaussianLogPDF(), Bar, Signal, hmmForwardLog(), logSumExp(), normalize() (+9 more)
 
 ### Community 17 - "Go Chart Tab & Time"
-Cohesion: 0.25
-Nodes (4): Duration, termApp, Time, chartRange
+Cohesion: 0.13
+Nodes (12): aggregateBars(), drawString(), fmtVolume(), Bar, Color, Duration, termApp, Screen (+4 more)
 
 ### Community 18 - "Rust Indicator Tests"
 Cohesion: 0.27
@@ -189,8 +190,8 @@ Cohesion: 0.32
 Nodes (31): AlpacaClient, Arc, Context, OrderRequest, Sender, String, Vec, Msg (+23 more)
 
 ### Community 20 - "Rust Indicator Prefs/Persistence"
-Cohesion: 0.18
-Nodes (13): IndicatorPrefs, Default, Result, Self, String, Vec, PathBuf, AppState (+5 more)
+Cohesion: 0.15
+Nodes (14): Command, IndicatorPrefs, Default, Result, Self, String, Vec, PathBuf (+6 more)
 
 ### Community 21 - "Rust Compare Strategies"
 Cohesion: 0.43
@@ -265,24 +266,24 @@ Cohesion: 0.67
 Nodes (4): build-linux CI job, deploy CI job (GitHub Pages), Linux binary artifact (Alpaca_Trading_Terminal_Rust_LINUX), CI does not commit binary back to repo
 
 ## Knowledge Gaps
-- **156 isolated node(s):** `Tabs`, `Across every tab`, `Indicators (Chart tab)`, `Download`, `Run` (+151 more)
+- **157 isolated node(s):** `Stack`, `Commands (run from this directory)`, `Architecture rules`, `Don't`, `make-ico.sh script` (+152 more)
   These have ≤1 connection - possible missing edges or undocumented components.
-- **5 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
+- **6 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
 
 ## Suggested Questions
 _Questions this graph is uniquely positioned to answer:_
 
-- **Why does `abs()` connect `Strategy Simulation Tests` to `Go Chart Rendering`, `Cross-App Feature Concepts`, `Markov/HMM Regime Tests`, `ADX Strategy`, `MACD/RSI Strategies`?**
-  _High betweenness centrality (0.037) - this node is a cross-community bridge._
+- **Why does `abs()` connect `Strategy Simulation Tests` to `Go Chart Rendering`, `Markov/HMM Regime Tests`, `ADX Strategy`, `MACD/RSI Strategies`?**
+  _High betweenness centrality (0.044) - this node is a cross-community bridge._
 - **Why does `Sync` connect `Rust egui Chart Plotting` to `Rust Formatting/Client Utils`?**
   _High betweenness centrality (0.033) - this node is a cross-community bridge._
 - **Are the 19 inferred relationships involving `barsFromCloses()` (e.g. with `TestBollingerBuysOnLowerBandTouch()` and `TestBollingerExitsAtMeanAfterLong()`) actually correct?**
   _`barsFromCloses()` has 19 INFERRED edges - model-reasoned connections that need verification._
-- **What connects `Tabs`, `Across every tab`, `Indicators (Chart tab)` to the rest of the system?**
-  _162 weakly-connected nodes found - possible documentation gaps or missing edges._
+- **What connects `Stack`, `Commands (run from this directory)`, `Architecture rules` to the rest of the system?**
+  _163 weakly-connected nodes found - possible documentation gaps or missing edges._
 - **Should `Rust Alpaca API Models` be split into smaller, more focused modules?**
   _Cohesion score 0.07610931531002058 - nodes in this community are weakly interconnected._
 - **Should `Go Chart Rendering` be split into smaller, more focused modules?**
-  _Cohesion score 0.09696969696969697 - nodes in this community are weakly interconnected._
+  _Cohesion score 0.10119047619047619 - nodes in this community are weakly interconnected._
 - **Should `Rust App State & Client` be split into smaller, more focused modules?**
   _Cohesion score 0.08637747336377473 - nodes in this community are weakly interconnected._

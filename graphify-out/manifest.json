@@ -235,8 +235,8 @@
     "semantic_hash": "dca7c7a733b5b5432349016ab9f95ef4"
   },
   "main-trading-terminal-rust/CLAUDE.md": {
-    "mtime": 1781081819.3735456,
-    "ast_hash": "7378e0c278382c0d94020dd9b0d43bac",
+    "mtime": 1781124345.459994,
+    "ast_hash": "a8670b0532298569776abb0f0ec2e59e",
     "semantic_hash": ""
   },
   "main-trading-terminal-rust/README.md": {
@@ -290,8 +290,8 @@
     "semantic_hash": ""
   },
   "main-trading-terminal-rust/.claude/settings.local.json": {
-    "mtime": 1781122923.9196472,
-    "ast_hash": "b33a7de3da9ea9eaee2c090726fa3d6a",
+    "mtime": 1781124097.4080498,
+    "ast_hash": "6024415e85ead83bf1c163d953a6f0c5",
     "semantic_hash": ""
   },
   "main-trading-terminal-rust/src/crypto.rs": {
@@ -302,6 +302,16 @@
   "main-trading-terminal-rust/docs/adr/0002-always-warm-crypto-stream-full-chart-integration.md": {
     "mtime": 1781032296.968328,
     "ast_hash": "34d422ad0345722216045a736e0a0352",
+    "semantic_hash": ""
+  },
+  "main-trading-terminal-rust/assets/make-ico.sh": {
+    "mtime": 1781124052.5485358,
+    "ast_hash": "2e2c152982ced2a49e1da245a6a38634",
+    "semantic_hash": ""
+  },
+  "main-trading-terminal-rust/build.rs": {
+    "mtime": 1781124161.0075514,
+    "ast_hash": "c9b4d08f226d47ee4972cdc85e5d6e35",
     "semantic_hash": ""
   }
 }
