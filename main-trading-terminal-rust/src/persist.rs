@@ -31,10 +31,18 @@ pub struct AppState {
     pub compare_range_idx: usize,
     /// Pinned tickers for the watchlist sidebar / ticker tape (Step 5).
     pub watchlist: Vec<String>,
+    /// Whether the watchlist sidebar is hidden. Toggled from the sidebar's
+    /// `«` button / the tab strip's ☰ WATCH toggle; restored on launch so a
+    /// user who wants max chart real estate keeps it.
+    pub watchlist_collapsed: bool,
     /// Last underlying loaded on the Options desk (uppercased). Restored so the
     /// chain is one keystroke away on relaunch; the chain itself loads lazily
     /// when the Options tab is first opened.
     pub last_underlying: String,
+    /// Last Pair filter on the Crypto desk (slash form, e.g. "BTC/USD").
+    /// Restored on launch; the Markets grid itself loads lazily on first
+    /// Crypto-tab visit.
+    pub last_pair: String,
 }
 
 impl Default for AppState {
@@ -47,7 +55,9 @@ impl Default for AppState {
             compare_slots: Vec::new(),
             compare_range_idx: 1,
             watchlist: Vec::new(),
+            watchlist_collapsed: false,
             last_underlying: String::new(),
+            last_pair: String::new(),
         }
     }
 }

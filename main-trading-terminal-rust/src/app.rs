@@ -13,10 +13,11 @@ use crate::chart;
 use crate::command::{self as cmd, Command, Page, Side as CmdSide};
 use crate::compare::{CompareState, COMPARE_RANGES};
 use crate::config;
+use crate::crypto::{self, CryptoState};
 use crate::options::{self, OptionsState};
 use crate::persist;
 use crate::stocks::AssetCache;
-use crate::stream::{self, SubMsg, TickCache, OPTIONS_STREAM_URL, STREAM_URL};
+use crate::stream::{self, SubMsg, TickCache, CRYPTO_STREAM_URL, OPTIONS_STREAM_URL, STREAM_URL};
 use crate::terminal::TerminalState;
 use crate::theme;
 use crate::watchlist::WatchlistState;
@@ -49,7 +50,8 @@ const PALETTE_FUNCS: &[(&str, &str)] = &[
     ("ORDERS",              "Trading Terminal / Orders"),
     ("ACT / ACTIVITY",      "Trading Terminal / Activity"),
     ("OPT <TICKER>",        "Options desk — load chain for ticker"),
-    ("WATCH <TICKER>",      "add to watchlist sidebar"),
+    ("CRY [<PAIR>]",        "Crypto desk — markets grid; CRY BTC = BTC/USD"),
+    ("WATCH <TICKER>",      "add to watchlist (Pairs too: WATCH BTC/USD)"),
     ("API CHANGE",          "re-enter API key / secret / paper-or-live"),
     ("HELP / ?",            "show this help overlay"),
 ];
@@ -60,6 +62,7 @@ pub enum Tab {
     Compare,
     Terminal,
     Options,
+    Crypto,
 }
 
 /// Indicator toggles + their (default) periods. Matches the tview/ratatui
@@ -206,6 +209,12 @@ pub struct ChartApp {
     /// was restored) the chain load.
     pub options_primed: bool,
 
+    /// Crypto desk state (Markets / Positions / Orders sub-tabs).
+    pub crypto: CryptoState,
+    /// Lazy-prime flag for the Crypto tab — first visit kicks the markets
+    /// load + positions/orders refresh.
+    pub crypto_primed: bool,
+
     /// Last `AppState` we serialized to disk. We diff against this at the end
     /// of every frame to decide whether to save; cheap struct comparison.
     pub last_saved_state: persist::AppState,
@@ -233,15 +242,25 @@ pub struct ChartApp {
     pub options_stream_tx: std::sync::mpsc::Sender<SubMsg>,
     /// Most recent OCC subscription set pushed to the options stream.
     pub options_last_subscribed: std::collections::HashSet<String>,
+    /// Outbound channel to the THIRD stream thread — the crypto data feed
+    /// (`/v1beta3/crypto/us`). Pair-keyed ticks land in the same shared
+    /// `tick_cache`. ALWAYS active — it has its own connection allowance and
+    /// does not participate in the stock↔options handoff. See docs/adr/0002.
+    pub crypto_stream_tx: std::sync::mpsc::Sender<SubMsg>,
+    /// Most recent Pair subscription set pushed to the crypto stream.
+    pub crypto_last_subscribed: std::collections::HashSet<String>,
     /// Which stream currently holds the single allowed connection. Tracked so
     /// we only send `SubMsg::SetActive` on an actual change (tab switch), and
     /// always free the connection before claiming it. Stock starts active.
     pub stock_stream_active: bool,
     pub options_stream_active: bool,
     /// Live connection state of the WS, reported by the stream thread via
-    /// `Msg::StreamStatus`. Surfaced in the top tab strip until the proper
-    /// status bar lands (Tier 3 / Step ?).
+    /// `Msg::StreamStatus`. Surfaced in the tab strip's right-side status
+    /// cluster (and re-used by the Chart header's LIVE chip).
     pub stream_connected: bool,
+    /// Last reported WS round-trip latency — shown in the status cluster's
+    /// hover text. `None` until the first status message carries one.
+    pub stream_latency_ms: Option<u32>,
 
     /// Pinned watchlist symbols + transient sidebar state (input/edit
     /// mode). The symbol list is persisted via `snapshot_state`.
@@ -319,6 +338,21 @@ impl ChartApp {
             false, // options indicative feed carries trades/quotes only, no bars
             false, // start idle — only connects while the Options tab is open
         );
+        // Third stream: crypto data feed. Shares the tick cache (Pair keys
+        // don't collide with equity/OCC symbols) and is ALWAYS active — the
+        // crypto endpoint has its own connection allowance, so it sits outside
+        // the stock↔options handoff. Off-screen it just holds an empty
+        // subscription set. See docs/adr/0002.
+        let crypto_stream_tx = stream::spawn_stream(
+            client.clone(),
+            tx.clone(),
+            ctx.clone(),
+            tick_cache.clone(),
+            CRYPTO_STREAM_URL,
+            false, // don't report status — stock stream owns the indicator
+            true,  // crypto stream carries minute bars (chart morphs from them)
+            true,  // always active — 24/7 market, subscriptions gate the cost
+        );
 
         // Restore the saved state from disk (or fall back to defaults if no
         // state.json exists yet / it's unreadable). Clamp the persisted
@@ -391,6 +425,14 @@ impl ChartApp {
                 o
             },
             options_primed: false,
+            crypto: {
+                let mut c = CryptoState::new();
+                // Restore the last pair filter; the markets grid itself
+                // loads lazily on first Crypto visit.
+                c.pair_input = saved.last_pair.clone();
+                c
+            },
+            crypto_primed: false,
             last_saved_state: saved.clone(),
             state_dirty_since: None,
             tick_cache,
@@ -398,10 +440,17 @@ impl ChartApp {
             last_subscribed: std::collections::HashSet::new(),
             options_stream_tx,
             options_last_subscribed: std::collections::HashSet::new(),
+            crypto_stream_tx,
+            crypto_last_subscribed: std::collections::HashSet::new(),
             stock_stream_active: true,
             options_stream_active: false,
             stream_connected: false,
-            watchlist: WatchlistState::from_saved(&saved.watchlist),
+            stream_latency_ms: None,
+            watchlist: {
+                let mut w = WatchlistState::from_saved(&saved.watchlist);
+                w.collapsed = saved.watchlist_collapsed;
+                w
+            },
             command_input: String::new(),
             command_focus_requested: false,
             command_error: None,
@@ -448,7 +497,9 @@ impl ChartApp {
             compare_slots: self.compare.slots.iter().map(|s| s.symbol.clone()).collect(),
             compare_range_idx: self.compare.range_idx,
             watchlist: self.watchlist.symbols.clone(),
+            watchlist_collapsed: self.watchlist.collapsed,
             last_underlying: self.options.underlying.clone(),
+            last_pair: self.crypto.pair_input.clone(),
         }
     }
 
@@ -512,6 +563,19 @@ impl ChartApp {
                 self.options.kick_chain_load(self.client.clone(), self.tx.clone(), ctx, sym);
                 self.options.refresh_account_data(self.client.clone(), self.tx.clone(), ctx);
             }
+            Command::Crypto(pair) => {
+                self.current_tab = Tab::Crypto;
+                self.crypto.sub_tab = crate::crypto::SubTab::Markets;
+                // A given pair (already /USD-normalized by the parser)
+                // becomes the grid filter so its row + B/S buttons are
+                // front and center.
+                if let Some(p) = pair {
+                    self.crypto.pair_input = p;
+                }
+                self.crypto_primed = true; // we're loading now; skip re-prime
+                self.crypto.kick_markets_load(self.client.clone(), self.tx.clone(), ctx);
+                self.crypto.refresh_account_data(self.client.clone(), self.tx.clone(), ctx);
+            }
             Command::AddToWatchlist(sym) => {
                 self.watchlist.add(&sym);
             }
@@ -571,8 +635,9 @@ impl ChartApp {
         // new key. Best-effort — if the thread has died the next launch
         // re-spawns cleanly.
         let _ = self.stream_tx.send(SubMsg::ReplaceClient(new_client.clone()));
-        // Same for the options data stream — it auths with the same key.
+        // Same for the options + crypto data streams — they auth with the same key.
         let _ = self.options_stream_tx.send(SubMsg::ReplaceClient(new_client.clone()));
+        let _ = self.crypto_stream_tx.send(SubMsg::ReplaceClient(new_client.clone()));
         // Force a re-fetch of the asset universe (different account tiers
         // see different asset sets) and reset everything the Terminal tab
         // was holding so the next 10s tick repopulates from scratch.
@@ -586,6 +651,11 @@ impl ChartApp {
         self.options.underlying = keep_underlying.clone();
         self.options.underlying_input = keep_underlying;
         self.options_primed = false;
+        // Reset the Crypto desk the same way — keep the pair filter, drop data.
+        let keep_pair = self.crypto.pair_input.clone();
+        self.crypto = CryptoState::new();
+        self.crypto.pair_input = keep_pair;
+        self.crypto_primed = false;
         // Bars from the old client are now meaningless — wipe and bump gen
         // so any in-flight response is filtered out by drain_messages.
         self.bars.clear();
@@ -793,7 +863,10 @@ impl ChartApp {
                     );
                     let edit = egui::TextEdit::singleline(&mut self.command_input)
                         .id(palette_id)
-                        .desired_width(ui.available_width() - 220.0)
+                        // Clamped so a narrow window can't drive the width
+                        // negative (egui treats that as "as wide as possible",
+                        // which shoves the status label off-screen).
+                        .desired_width((ui.available_width() - 220.0).max(120.0))
                         .hint_text(
                             "/ symbol · BUY 10 AAPL · COMP MSFT NVDA · PORT · API CHANGE · HELP",
                         );
@@ -943,6 +1016,7 @@ impl ChartApp {
                 "COMP ",
                 "TRADE ",
                 "WATCH ",
+                "CRY ",
                 "PORT",
                 "ORDERS",
                 "ACT",
@@ -1012,24 +1086,60 @@ impl ChartApp {
     /// further diffs and emits subscribe/unsubscribe frames so we don't
     /// thrash the socket.
     fn sync_stream_subscriptions(&mut self) {
+        // Pairs (slash symbols) belong to the crypto stream; everything they
+        // appear in (chart / compare / watchlist / positions) is split here —
+        // the IEX feed rejects them. See docs/adr/0002.
+        let is_pair = |s: &str| s.contains('/');
         let mut want: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut crypto_want: std::collections::HashSet<String> = std::collections::HashSet::new();
         if !self.current_symbol.is_empty() {
-            want.insert(self.current_symbol.clone());
+            if is_pair(&self.current_symbol) {
+                crypto_want.insert(self.current_symbol.clone());
+            } else {
+                want.insert(self.current_symbol.clone());
+            }
         }
         for s in &self.compare.slots {
             if !s.symbol.is_empty() {
-                want.insert(s.symbol.clone());
+                if is_pair(&s.symbol) {
+                    crypto_want.insert(s.symbol.clone());
+                } else {
+                    want.insert(s.symbol.clone());
+                }
             }
         }
         for p in &self.terminal.positions {
-            if !p.symbol.is_empty() {
+            if !p.symbol.is_empty() && !is_pair(&p.symbol) {
                 want.insert(p.symbol.clone());
             }
         }
         for w in &self.watchlist.symbols {
             if !w.is_empty() {
-                want.insert(w.clone());
+                if is_pair(w) {
+                    crypto_want.insert(w.clone());
+                } else {
+                    want.insert(w.clone());
+                }
             }
+        }
+        // Held crypto positions stream around the clock (24/7 market, live
+        // P&L in the sidebar-adjacent surfaces), plus the Markets grid while
+        // the Crypto tab is open.
+        for p in &self.crypto.positions {
+            if !p.symbol.is_empty() {
+                crypto_want.insert(p.symbol.clone());
+            }
+        }
+        if self.current_tab == Tab::Crypto {
+            for sym in self.crypto.displayed_pairs() {
+                crypto_want.insert(sym);
+            }
+        }
+        if crypto_want != self.crypto_last_subscribed {
+            let _ = self
+                .crypto_stream_tx
+                .send(SubMsg::SetSubscriptions(crypto_want.clone()));
+            self.crypto_last_subscribed = crypto_want;
         }
         if want != self.last_subscribed {
             // Best-effort: if the WS thread has died we just drop the
@@ -1257,8 +1367,9 @@ impl ChartApp {
                         );
                     }
                 }
-                Msg::StreamStatus { connected, latency_ms: _ } => {
+                Msg::StreamStatus { connected, latency_ms } => {
                     self.stream_connected = connected;
+                    self.stream_latency_ms = latency_ms;
                 }
                 Msg::TradeChartBars { symbol, gen, bars } => {
                     // Stale-response guard — drop responses whose gen lags
@@ -1367,6 +1478,101 @@ impl ChartApp {
                     if result.is_ok() {
                         self.options.open_orders.retain(|o| o.id != id);
                         self.options.refresh_account_data(
+                            self.client.clone(),
+                            self.tx.clone(),
+                            ctx,
+                        );
+                    }
+                }
+                // ---- Crypto desk fetches ----
+                Msg::CryptoAssets { gen, result } => {
+                    if gen != self.crypto.gen {
+                        continue; // stale
+                    }
+                    match result {
+                        Ok(assets) => {
+                            self.crypto.err.clear();
+                            // Chains the snapshot fetch for the USD universe.
+                            self.crypto.on_assets_loaded(
+                                assets,
+                                self.client.clone(),
+                                self.tx.clone(),
+                                ctx,
+                            );
+                        }
+                        Err(e) => {
+                            self.crypto.loading = false;
+                            self.crypto.err = e.to_string();
+                        }
+                    }
+                }
+                Msg::CryptoSnapshots { gen, result } => {
+                    if gen != self.crypto.gen {
+                        continue;
+                    }
+                    match result {
+                        Ok(snaps) => self.crypto.snapshots = snaps,
+                        // Non-fatal — the pair list still renders; quotes stay
+                        // blank until the WS fills them in.
+                        Err(e) => self.crypto.err = e.to_string(),
+                    }
+                }
+                Msg::CryptoPositions(result) => {
+                    self.crypto.positions_loading = false;
+                    match result {
+                        Ok(v) => {
+                            // Crypto desk shows only crypto positions.
+                            self.crypto.positions =
+                                v.into_iter().filter(|p| p.asset_class == "crypto").collect();
+                            self.crypto.positions_err.clear();
+                        }
+                        Err(e) => self.crypto.positions_err = e.to_string(),
+                    }
+                }
+                Msg::CryptoOpenOrders(result) => {
+                    self.crypto.orders_loading = false;
+                    match result {
+                        Ok(v) => {
+                            let cry: Vec<_> =
+                                v.into_iter().filter(|o| o.asset_class == "crypto").collect();
+                            let live: std::collections::HashSet<_> =
+                                cry.iter().map(|o| o.id.clone()).collect();
+                            self.crypto.cancelling.retain(|id| live.contains(id));
+                            self.crypto.open_orders = cry;
+                            self.crypto.open_orders_err.clear();
+                        }
+                        Err(e) => self.crypto.open_orders_err = e.to_string(),
+                    }
+                }
+                Msg::CryptoOrderPlaced { req_summary, result } => {
+                    self.crypto.form.busy = false;
+                    match result {
+                        Ok(o) => {
+                            self.crypto.form.result = format!(
+                                "Placed {} — order id {} (status: {})",
+                                req_summary,
+                                &o.id[..o.id.len().min(8)],
+                                o.status
+                            );
+                            self.crypto.form.result_color = theme::GREEN;
+                            self.crypto.refresh_account_data(
+                                self.client.clone(),
+                                self.tx.clone(),
+                                ctx,
+                            );
+                        }
+                        Err(e) => {
+                            self.crypto.form.result =
+                                format!("Failed to place {}: {}", req_summary, e);
+                            self.crypto.form.result_color = theme::RED;
+                        }
+                    }
+                }
+                Msg::CryptoOrderCancelled { id, result } => {
+                    self.crypto.cancelling.remove(&id);
+                    if result.is_ok() {
+                        self.crypto.open_orders.retain(|o| o.id != id);
+                        self.crypto.refresh_account_data(
                             self.client.clone(),
                             self.tx.clone(),
                             ctx,
@@ -1499,6 +1705,28 @@ impl EApp for ChartApp {
             ctx.request_repaint_after(std::time::Duration::from_secs(1));
         }
 
+        // Same lazy-prime + 10s auto-refresh for the Crypto desk. First visit
+        // loads the Markets grid (assets → snapshots) and the positions/orders;
+        // the 10s tick refreshes account data only — live prices ride the
+        // always-active crypto WebSocket, not the poll.
+        if self.current_tab == Tab::Crypto {
+            if !self.crypto_primed {
+                self.crypto_primed = true;
+                self.crypto.kick_markets_load(self.client.clone(), self.tx.clone(), ctx);
+                self.crypto
+                    .refresh_account_data(self.client.clone(), self.tx.clone(), ctx);
+            } else if self
+                .crypto
+                .last_refresh
+                .map(|t| t.elapsed() >= std::time::Duration::from_secs(10))
+                .unwrap_or(true)
+            {
+                self.crypto
+                    .refresh_account_data(self.client.clone(), self.tx.clone(), ctx);
+            }
+            ctx.request_repaint_after(std::time::Duration::from_secs(1));
+        }
+
         // Watchlist sidebar — mounted across every tab so the user can
         // glance at pinned tickers without context-switching. Click a row
         // → load that symbol on the Chart tab. The bottom ticker tape is
@@ -1585,6 +1813,17 @@ impl EApp for ChartApp {
                     );
                 });
             }
+            Tab::Crypto => {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    crypto::render(
+                        &mut self.crypto,
+                        self.client.clone(),
+                        self.tx.clone(),
+                        &self.tick_cache,
+                        ui,
+                    );
+                });
+            }
         }
 
         // Push the latest desired stream subscriptions to the WS thread if
@@ -1615,6 +1854,7 @@ impl ChartApp {
                 (Tab::Chart, "Chart"),
                 (Tab::Compare, "Compare"),
                 (Tab::Options, "Options"),
+                (Tab::Crypto, "Crypto"),
             ] {
                 let active = self.current_tab == tab;
                 let text = format!("  {}  ", label);
@@ -1631,6 +1871,73 @@ impl ChartApp {
                     self.current_tab = tab;
                 }
             }
+
+            // Right-side status cluster: account mode badge, stream health,
+            // watchlist toggle. Rendered right-to-left so the badge anchors
+            // the far edge. The PAPER/LIVE badge is the one always-visible
+            // cue for "are my orders real money" — clicking it opens the
+            // same credentials modal as `API CHANGE`.
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let paper = self.client.base_url.is_empty()
+                    || self.client.base_url.contains("paper");
+                let badge = if paper {
+                    egui::Button::new(
+                        RichText::new(" PAPER ").color(theme::BLACK).strong(),
+                    )
+                    .fill(theme::CYAN)
+                } else {
+                    egui::Button::new(
+                        RichText::new(" LIVE ").color(theme::BLACK).strong(),
+                    )
+                    .fill(theme::RED)
+                };
+                let hover = if paper {
+                    "Paper trading — simulated orders via paper-api.alpaca.markets. Click to change."
+                } else {
+                    "LIVE trading — real-money orders via api.alpaca.markets. Click to change."
+                };
+                if ui.add(badge).on_hover_text(hover).clicked() {
+                    self.open_credentials_modal(false);
+                }
+
+                let (dot, color, stream_hover) = if self.stream_connected {
+                    (
+                        "● DATA".to_string(),
+                        theme::GREEN,
+                        match self.stream_latency_ms {
+                            Some(ms) => format!("Stock data stream connected — {ms}ms"),
+                            None => "Stock data stream connected".to_string(),
+                        },
+                    )
+                } else {
+                    (
+                        "○ DATA".to_string(),
+                        theme::GRAY2,
+                        "Stock data stream offline (it hands the connection to the \
+                         options feed while the Options tab is open)"
+                            .to_string(),
+                    )
+                };
+                ui.label(RichText::new(dot).color(color).size(12.0))
+                    .on_hover_text(stream_hover);
+
+                let watch_btn = if self.watchlist.collapsed {
+                    egui::Button::new(RichText::new(" ☰ WATCH ").color(theme::GRAY2))
+                        .fill(theme::DARK)
+                } else {
+                    egui::Button::new(
+                        RichText::new(" ☰ WATCH ").color(theme::BLACK).strong(),
+                    )
+                    .fill(theme::ORANGE)
+                };
+                if ui
+                    .add(watch_btn)
+                    .on_hover_text("Show / hide the watchlist sidebar")
+                    .clicked()
+                {
+                    self.watchlist.collapsed = !self.watchlist.collapsed;
+                }
+            });
         });
         ui.add_space(2.0);
     }

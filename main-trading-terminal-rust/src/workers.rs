@@ -11,8 +11,8 @@ use std::thread;
 use chrono::{Datelike, Duration as ChronoDuration, TimeZone, Utc};
 
 use crate::api::{
-    Account, Activity, AlpacaClient, Bar, OptionContract, OptionSnapshot, Order, OrderRequest,
-    Position,
+    Account, Activity, AlpacaClient, Bar, CryptoSnapshot, OptionContract, OptionSnapshot, Order,
+    OrderRequest, Position,
 };
 
 pub enum Msg {
@@ -99,11 +99,47 @@ pub enum Msg {
         id: String,
         result: anyhow::Result<()>,
     },
+    // ---- Crypto desk fetches ----
+    /// Tradable crypto asset list (the Markets-grid universe). `gen` guards
+    /// against a stale response after a reload.
+    CryptoAssets {
+        gen: u64,
+        result: anyhow::Result<Vec<crate::api::Asset>>,
+    },
+    /// Bulk pair snapshots keyed by slash symbol. Same stale guard.
+    CryptoSnapshots {
+        gen: u64,
+        result: anyhow::Result<HashMap<String, CryptoSnapshot>>,
+    },
+    /// Raw `/v2/positions` result — the receiver filters to asset_class
+    /// `crypto`, mirroring the Options desk.
+    CryptoPositions(anyhow::Result<Vec<Position>>),
+    CryptoOpenOrders(anyhow::Result<Vec<Order>>),
+    CryptoOrderPlaced {
+        req_summary: String,
+        result: anyhow::Result<Order>,
+    },
+    CryptoOrderCancelled {
+        id: String,
+        result: anyhow::Result<()>,
+    },
 }
 
+/// Load the autocomplete universe: equities + tradable USD crypto Pairs in
+/// one background thread, merged into a single `Msg::Assets`. Pairs ride the
+/// same `AssetCache`, so every symbol input (Chart toolbar, Compare picker,
+/// palette, watchlist) suggests `BTC/USD` when the user types "BTC" — or
+/// "bitcoin", via the cache's name-substring search ("Bitcoin / US Dollar").
+/// The crypto fetch is best-effort: if it fails, equities still load.
 pub fn spawn_assets(client: Arc<AlpacaClient>, tx: Sender<Msg>, ctx: egui::Context) {
     thread::spawn(move || {
-        let _ = tx.send(Msg::Assets(client.get_assets()));
+        let result = client.get_assets().map(|mut equities| {
+            if let Ok(crypto) = client.get_crypto_assets() {
+                equities.extend(crate::crypto::usd_pairs(crypto));
+            }
+            equities
+        });
+        let _ = tx.send(Msg::Assets(result));
         ctx.request_repaint();
     });
 }
@@ -323,6 +359,71 @@ pub fn spawn_option_cancel_order(
     thread::spawn(move || {
         let result = client.cancel_order(&id);
         let _ = tx.send(Msg::OptOrderCancelled { id, result });
+        ctx.request_repaint();
+    });
+}
+
+// ---------------- Crypto desk spawn helpers ----------------
+
+pub fn spawn_crypto_assets(client: Arc<AlpacaClient>, tx: Sender<Msg>, ctx: egui::Context, gen: u64) {
+    thread::spawn(move || {
+        let result = client.get_crypto_assets();
+        let _ = tx.send(Msg::CryptoAssets { gen, result });
+        ctx.request_repaint();
+    });
+}
+
+pub fn spawn_crypto_snapshots(
+    client: Arc<AlpacaClient>,
+    tx: Sender<Msg>,
+    ctx: egui::Context,
+    symbols: Vec<String>,
+    gen: u64,
+) {
+    thread::spawn(move || {
+        let result = client.get_crypto_snapshots(&symbols);
+        let _ = tx.send(Msg::CryptoSnapshots { gen, result });
+        ctx.request_repaint();
+    });
+}
+
+pub fn spawn_crypto_positions(client: Arc<AlpacaClient>, tx: Sender<Msg>, ctx: egui::Context) {
+    thread::spawn(move || {
+        let _ = tx.send(Msg::CryptoPositions(client.get_positions()));
+        ctx.request_repaint();
+    });
+}
+
+pub fn spawn_crypto_open_orders(client: Arc<AlpacaClient>, tx: Sender<Msg>, ctx: egui::Context) {
+    thread::spawn(move || {
+        let _ = tx.send(Msg::CryptoOpenOrders(client.get_orders()));
+        ctx.request_repaint();
+    });
+}
+
+pub fn spawn_crypto_place_order(
+    client: Arc<AlpacaClient>,
+    tx: Sender<Msg>,
+    ctx: egui::Context,
+    req: OrderRequest,
+    req_summary: String,
+) {
+    thread::spawn(move || {
+        let result = client.place_order(&req);
+        let _ = tx.send(Msg::CryptoOrderPlaced { req_summary, result });
+        ctx.request_repaint();
+    });
+}
+
+pub fn spawn_crypto_cancel_order(
+    client: Arc<AlpacaClient>,
+    tx: Sender<Msg>,
+    ctx: egui::Context,
+    id: String,
+) {
+    thread::spawn(move || {
+        let result = client.cancel_order(&id);
+        let _ = tx.send(Msg::CryptoOrderCancelled { id, result });
         ctx.request_repaint();
     });
 }

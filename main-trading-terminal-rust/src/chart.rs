@@ -12,8 +12,8 @@
 
 use egui::{Color32, Stroke, Vec2b};
 use egui_plot::{
-    AxisHints, Bar as BarMark, BarChart, BoxElem, BoxPlot, BoxSpread, GridMark, HLine, Line,
-    MarkerShape, Plot, PlotPoints, Points, Polygon,
+    AxisHints, Bar as BarMark, BarChart, BoxElem, BoxPlot, BoxSpread, GridMark, HLine, HPlacement,
+    Line, MarkerShape, Plot, PlotBounds, PlotMemory, PlotPoint, PlotPoints, Points, Polygon, Text,
 };
 
 use crate::api::Bar;
@@ -108,6 +108,19 @@ pub fn render(app: &ChartApp, ui: &mut egui::Ui) {
     // Shared groups so all plots pan/zoom/hover together.
     let axis_group = ui.id().with("alpaca_axis_link");
     let cursor_group = ui.id().with("alpaca_cursor_link");
+    // The price pane's plot id (egui_plot derives it as ui.id().with(name)).
+    // Sub-panes read its memory for the CURRENT frame's X window — see
+    // `price_x_window`.
+    let price_plot_id = ui.id().with("price");
+
+    // TradingView shows the time scale once, under the bottom-most pane —
+    // not in the middle of the stack. Exactly one of these is true.
+    let x_axis_on_macd = ind.macd;
+    let x_axis_on_rsi = ind.rsi && !ind.macd;
+    let x_axis_on_volume = ind.volume && !ind.rsi && !ind.macd;
+    let x_axis_on_price = !ind.volume && !ind.rsi && !ind.macd;
+    // Sub-daily timeframes label ticks with clock time; daily+ with dates.
+    let intraday = app.tf_idx <= 4;
 
     // X/Y zoom toggles from the toolbar. egui_plot::Plot::allow_zoom takes a
     // Vec2b — pass per-axis booleans so the user can lock one axis while
@@ -225,13 +238,52 @@ pub fn render(app: &ChartApp, ui: &mut egui::Ui) {
         .allow_drag(zoom)
         .allow_scroll(zoom)
         .allow_zoom(zoom)
-        .show_axes([true, true])
+        .show_axes([x_axis_on_price, true])
+        .y_axis_position(HPlacement::Right) // TradingView price scale lives on the right
+        .x_axis_formatter(make_time_axis_formatter(bars, intraday))
         .x_axis_label("")
         .show_x(false) // we'll show our own time tooltip
         .label_formatter(make_label_formatter(bars));
     let price_plot = if reset_view { price_plot.reset() } else { price_plot };
     price_plot
         .show(ui, |plot_ui| {
+            // TradingView-style auto-scale: while the Y axis is locked (the
+            // default), refit the price scale to whatever X window the user
+            // has panned/zoomed to. Skipped while the plot is in auto-bounds
+            // mode (egui_plot is already fitting everything — and on the
+            // first frame the remembered bounds are garbage) and on the HOME
+            // frame (reset re-enables auto-bounds; fighting it would undo
+            // the fit).
+            if !app.zoom_y && !reset_view && !plot_ui.auto_bounds().x {
+                let b = plot_ui.plot_bounds();
+                if let Some((lo, hi)) = visible_index_range(&b, bars.len()) {
+                    let mut y_min = f64::INFINITY;
+                    let mut y_max = f64::NEG_INFINITY;
+                    for bar in &bars[lo..=hi] {
+                        y_min = y_min.min(bar.low);
+                        y_max = y_max.max(bar.high);
+                    }
+                    // Overlays (Bollinger especially) routinely poke outside
+                    // the candle range — include them so they don't clip.
+                    for series in
+                        [&ema, &sma, &vwap, &bb_upper, &bb_lower].into_iter().flatten()
+                    {
+                        for &v in series.get(lo..=hi).unwrap_or(&[]) {
+                            if !v.is_nan() {
+                                y_min = y_min.min(v);
+                                y_max = y_max.max(v);
+                            }
+                        }
+                    }
+                    if y_min.is_finite() && y_max.is_finite() && y_max > y_min {
+                        let pad = (y_max - y_min) * 0.06;
+                        plot_ui.set_plot_bounds(PlotBounds::from_min_max(
+                            [b.min()[0], y_min - pad],
+                            [b.max()[0], y_max + pad],
+                        ));
+                    }
+                }
+            }
             plot_ui.box_plot(
                 BoxPlot::new(candles)
                     .name("Price")
@@ -252,6 +304,29 @@ pub fn render(app: &ChartApp, ui: &mut egui::Ui) {
                 plot_ui.line(line_for("SMA", values, theme::YELLOW, 2.0));
             }
             if let (Some(u), Some(m), Some(l)) = (&bb_upper, &bb_mid, &bb_lower) {
+                // Translucent envelope between the rails — reads as one band
+                // (TradingView's default Bollinger fill) instead of three
+                // bare lines. Built as upper-path + reversed lower-path; NaN
+                // warmup values are skipped on both rails. No `.name()` on
+                // purpose: the band shouldn't add a legend entry.
+                let mut band: Vec<[f64; 2]> = Vec::with_capacity(u.len() * 2);
+                for (i, &v) in u.iter().enumerate() {
+                    if !v.is_nan() {
+                        band.push([i as f64, v]);
+                    }
+                }
+                for (i, &v) in l.iter().enumerate().rev() {
+                    if !v.is_nan() {
+                        band.push([i as f64, v]);
+                    }
+                }
+                if band.len() >= 3 {
+                    plot_ui.polygon(
+                        Polygon::new(PlotPoints::new(band))
+                            .fill_color(Color32::from_rgba_unmultiplied(120, 140, 160, 20))
+                            .stroke(Stroke::NONE),
+                    );
+                }
                 plot_ui.line(line_for("BB upper", u, theme::GRAY2, 1.0));
                 plot_ui.line(line_for("BB middle", m, theme::GRAY2, 1.0));
                 plot_ui.line(line_for("BB lower", l, theme::GRAY2, 1.0));
@@ -348,6 +423,26 @@ pub fn render(app: &ChartApp, ui: &mut egui::Ui) {
                         .stroke(Stroke::new(1.0, lp_color))
                         .name(format!("Close {:.2}", last.close)),
                 );
+                // Price tag riding the last-close line. TradingView pins it
+                // inside the axis gutter; egui_plot can't draw there, so park
+                // it just right of the final candle. Because Text items
+                // participate in auto-bounds, this also buys the TradingView
+                // -style breathing room between the last candle and the
+                // price scale.
+                let n = bars.len() as f64;
+                let tag_x = (n - 1.0) + (n * 0.04).clamp(2.0, 60.0);
+                plot_ui.text(
+                    Text::new(
+                        PlotPoint::new(tag_x, last.close),
+                        egui::RichText::new(format!("◂ {:.2}", last.close))
+                            .monospace()
+                            .strong()
+                            .size(12.0),
+                    )
+                    .color(lp_color)
+                    .anchor(egui::Align2::LEFT_CENTER)
+                    .allow_hover(false),
+                );
             }
         });
 
@@ -363,12 +458,35 @@ pub fn render(app: &ChartApp, ui: &mut egui::Ui) {
             .allow_drag(zoom)
             .allow_scroll(zoom)
             .allow_zoom(zoom)
-            .show_axes([false, true])
+            .show_axes([x_axis_on_volume, true])
+            .y_axis_position(HPlacement::Right)
+            .x_axis_formatter(make_time_axis_formatter(bars, intraday))
             .x_axis_label("")
             .show_x(false)
             .show_y(true);
         let vol_plot = if reset_view { vol_plot.reset() } else { vol_plot };
         vol_plot.show(ui, |plot_ui| {
+            // Same auto-scale as the price pane: fit the volume scale to the
+            // visible X window while Y is locked. The X comes from the price
+            // pane's memory, NOT this pane's own (stale) bounds — see
+            // `price_x_window` for why anything else fights the axis link.
+            if !app.zoom_y && !reset_view {
+                if let Some((x0, x1, lo, hi)) =
+                    price_x_window(plot_ui.ctx(), price_plot_id, bars.len())
+                {
+                    let max_v = bars[lo..=hi]
+                        .iter()
+                        .map(|bar| bar.volume)
+                        .max()
+                        .unwrap_or(0) as f64;
+                    if max_v > 0.0 {
+                        plot_ui.set_plot_bounds(PlotBounds::from_min_max(
+                            [x0, 0.0],
+                            [x1, max_v * 1.08],
+                        ));
+                    }
+                }
+            }
             plot_ui.bar_chart(BarChart::new(vol_bars).name("Volume"));
         });
     }
@@ -385,7 +503,9 @@ pub fn render(app: &ChartApp, ui: &mut egui::Ui) {
             .allow_drag(zoom)
             .allow_scroll(zoom)
             .allow_zoom(zoom)
-            .show_axes([false, true])
+            .show_axes([x_axis_on_rsi, true])
+            .y_axis_position(HPlacement::Right)
+            .x_axis_formatter(make_time_axis_formatter(bars, intraday))
             .x_axis_label("")
             .show_x(false)
             .include_y(0.0)
@@ -461,7 +581,17 @@ pub fn render(app: &ChartApp, ui: &mut egui::Ui) {
                 if v.is_nan() {
                     None
                 } else {
-                    let color = if v >= 0.0 { theme::GREEN } else { theme::RED };
+                    // TradingView's 4-state histogram: bright while momentum
+                    // is building away from zero, dimmed while it's fading
+                    // back toward it — on either side of the zero line.
+                    let prev = if i > 0 { hist[i - 1] } else { f64::NAN };
+                    let rising = !prev.is_nan() && v >= prev;
+                    let base = if v >= 0.0 { theme::GREEN } else { theme::RED };
+                    let color = if (v >= 0.0) == rising {
+                        base
+                    } else {
+                        base.gamma_multiply(0.45)
+                    };
                     Some(
                         BarMark::new(i as f64, v)
                             .fill(color)
@@ -480,12 +610,39 @@ pub fn render(app: &ChartApp, ui: &mut egui::Ui) {
             .allow_drag(zoom)
             .allow_scroll(zoom)
             .allow_zoom(zoom)
-            .show_axes([false, true])
+            .show_axes([x_axis_on_macd, true])
+            .y_axis_position(HPlacement::Right)
+            .x_axis_formatter(make_time_axis_formatter(bars, intraday))
             .x_axis_label("")
             .show_x(false);
         let macd_plot = if reset_view { macd_plot.reset() } else { macd_plot };
         macd_plot
             .show(ui, |plot_ui| {
+                // Same auto-scale as the price pane, over all three series.
+                // X window from the price pane's memory (see `price_x_window`).
+                if !app.zoom_y && !reset_view {
+                    if let Some((x0, x1, lo, hi)) =
+                        price_x_window(plot_ui.ctx(), price_plot_id, bars.len())
+                    {
+                        let mut y_min = f64::INFINITY;
+                        let mut y_max = f64::NEG_INFINITY;
+                        for series in [&hist, &macd_line, &signal_line] {
+                            for &v in series.get(lo..=hi).unwrap_or(&[]) {
+                                if !v.is_nan() {
+                                    y_min = y_min.min(v);
+                                    y_max = y_max.max(v);
+                                }
+                            }
+                        }
+                        if y_min.is_finite() && y_max.is_finite() && y_max > y_min {
+                            let pad = (y_max - y_min) * 0.1;
+                            plot_ui.set_plot_bounds(PlotBounds::from_min_max(
+                                [x0, y_min - pad],
+                                [x1, y_max + pad],
+                            ));
+                        }
+                    }
+                }
                 plot_ui.hline(
                     HLine::new(0.0)
                         .color(theme::GRAY2)
@@ -506,10 +663,13 @@ pub fn render(app: &ChartApp, ui: &mut egui::Ui) {
 // ── Builders / helpers ───────────────────────────────────────────────────
 
 /// Candle width was visibly merging at zoomed-out densities because the 1.4 px
-/// stroke around each box added pixels on top of the box_width. Pure fill
-/// (no stroke) at a narrower box_width keeps a real gap between adjacent
-/// candles at every reasonable zoom.
+/// stroke around each box added pixels on top of the box_width. The narrower
+/// box_width keeps a real gap between adjacent candles; the stroke is back to
+/// a thin 1 px in the SAME color as the fill because egui_plot draws the
+/// high/low whiskers (the wicks) with the stroke — `Stroke::NONE` rendered
+/// candles with no wicks at all.
 const CANDLE_BOX_WIDTH: f64 = 0.55; // leaves 0.45 of gap between unit-spaced bars
+const CANDLE_WICK_STROKE: f32 = 1.0;
 const VOLUME_BAR_WIDTH: f64 = 0.55; // match candles for visual alignment
 
 fn build_candles(bars: &[Bar]) -> Vec<BoxElem> {
@@ -525,8 +685,8 @@ fn build_candles(bars: &[Bar]) -> Vec<BoxElem> {
                 BoxSpread::new(b.low, lo_body, median, hi_body, b.high),
             )
             .fill(color)
-            .stroke(Stroke::NONE)
-            .whisker_width(0.0)
+            .stroke(Stroke::new(CANDLE_WICK_STROKE, color))
+            .whisker_width(0.0) // wick line only, no end caps — TradingView style
             .box_width(CANDLE_BOX_WIDTH)
         })
         .collect()
@@ -536,13 +696,84 @@ fn build_volume_bars(bars: &[Bar]) -> Vec<BarMark> {
     bars.iter()
         .enumerate()
         .map(|(i, b)| {
-            let color = if b.close >= b.open { theme::GREEN } else { theme::RED };
+            // Muted vs the candles (TradingView renders volume semi-
+            // transparent) so the pane reads as context, not signal.
+            let color = if b.close >= b.open { theme::GREEN } else { theme::RED }
+                .gamma_multiply(0.55);
             BarMark::new(i as f64, b.volume as f64)
                 .fill(color)
                 .stroke(Stroke::NONE)
                 .width(VOLUME_BAR_WIDTH)
         })
         .collect()
+}
+
+/// Clamp the plot's visible X window to valid bar indices. Returns `None`
+/// when the window doesn't overlap the data at all (or there is no data).
+fn visible_index_range(bounds: &PlotBounds, n: usize) -> Option<(usize, usize)> {
+    if n == 0 {
+        return None;
+    }
+    let lo = bounds.min()[0].floor().max(0.0);
+    let hi = bounds.max()[0].ceil().min((n - 1) as f64);
+    if !lo.is_finite() || !hi.is_finite() || hi < lo {
+        return None;
+    }
+    Some((lo as usize, hi as usize))
+}
+
+/// The X window a sub-pane (volume / MACD) should fit its Y scale against:
+/// the PRICE pane's current-frame bounds, read from its `PlotMemory`.
+///
+/// Why not the sub-pane's own `plot_ui.plot_bounds()`? Those are last frame's
+/// bounds, and `set_plot_bounds` replaces BOTH axes *after* egui_plot has
+/// transferred the link group's X into the pane — so fitting from the pane's
+/// own bounds clobbers the freshly-linked X with a stale one, writes the
+/// stale X back to the link group, and the panes visibly fight the user's
+/// pan. The price pane renders first each frame, so its memory already holds
+/// this frame's final X (drag included); re-asserting exactly that X keeps
+/// the link group consistent.
+///
+/// Returns `None` while the price pane is in X auto-bounds (fresh load /
+/// HOME reset) — the sub-panes should stay in auto mode then too.
+fn price_x_window(
+    ctx: &egui::Context,
+    price_plot_id: egui::Id,
+    n: usize,
+) -> Option<(f64, f64, usize, usize)> {
+    let mem = PlotMemory::load(ctx, price_plot_id)?;
+    if mem.auto_bounds.x {
+        return None;
+    }
+    let b = *mem.bounds();
+    let (lo, hi) = visible_index_range(&b, n)?;
+    Some((b.min()[0], b.max()[0], lo, hi))
+}
+
+/// X-axis tick formatter: bar index → local date/time, TradingView-style.
+/// Intraday timeframes label "MM-DD HH:MM"; daily and up label "YYYY-MM-DD".
+/// Fractional grid marks (sub-bar zoom) and out-of-range marks render empty
+/// so a deep zoom doesn't repeat the same stamp on every tick.
+fn make_time_axis_formatter(
+    bars: &[Bar],
+    intraday: bool,
+) -> impl Fn(GridMark, &std::ops::RangeInclusive<f64>) -> String + 'static {
+    let times: Vec<chrono::DateTime<chrono::Utc>> = bars.iter().map(|b| b.time).collect();
+    move |mark, _range| {
+        let v = mark.value;
+        if (v - v.round()).abs() > 1e-6 {
+            return String::new();
+        }
+        if v.round() < 0.0 || v.round() >= times.len() as f64 {
+            return String::new();
+        }
+        let t = times[v.round() as usize].with_timezone(&chrono::Local);
+        if intraday {
+            t.format("%m-%d %H:%M").to_string()
+        } else {
+            t.format("%Y-%m-%d").to_string()
+        }
+    }
 }
 
 fn line_for(name: &str, values: &[f64], color: Color32, width: f32) -> Line {
@@ -899,6 +1130,37 @@ mod tests {
         // Way after the last bar → still last bar.
         let t = Utc.with_ymd_and_hms(2026, 5, 19, 20, 0, 0).unwrap();
         assert_eq!(locate_bar_for_time(&bars, t), Some(2));
+    }
+
+    #[test]
+    fn visible_index_range_clamps_to_data() {
+        let b = PlotBounds::from_min_max([-3.0, 0.0], [5.4, 1.0]);
+        assert_eq!(visible_index_range(&b, 4), Some((0, 3)));
+        assert_eq!(visible_index_range(&b, 0), None);
+        // Window entirely right of the data.
+        let b = PlotBounds::from_min_max([10.0, 0.0], [20.0, 1.0]);
+        assert_eq!(visible_index_range(&b, 4), None);
+        // Window entirely left of the data.
+        let b = PlotBounds::from_min_max([-20.0, 0.0], [-10.0, 1.0]);
+        assert_eq!(visible_index_range(&b, 4), None);
+        // Window inside the data.
+        let b = PlotBounds::from_min_max([1.2, 0.0], [2.8, 1.0]);
+        assert_eq!(visible_index_range(&b, 10), Some((1, 3)));
+    }
+
+    #[test]
+    fn time_axis_formatter_labels_only_integral_in_range_marks() {
+        let bars = vec![bar(30, 100.0), bar(31, 101.0)];
+        let fmt = make_time_axis_formatter(&bars, false);
+        let range = 0.0..=2.0;
+        let mark = |value: f64| GridMark { value, step_size: 1.0 };
+        // Integral, in range — labelled (exact text is local-TZ dependent).
+        assert!(!fmt(mark(1.0), &range).is_empty());
+        // Fractional — empty so deep zooms don't repeat one date per tick.
+        assert!(fmt(mark(0.5), &range).is_empty());
+        // Out of range on both sides — empty.
+        assert!(fmt(mark(-1.0), &range).is_empty());
+        assert!(fmt(mark(2.0), &range).is_empty());
     }
 
     #[test]

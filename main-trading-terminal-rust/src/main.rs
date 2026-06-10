@@ -7,6 +7,7 @@ mod chart;
 mod command;
 mod compare;
 mod config;
+mod crypto;
 mod indicators;
 mod options;
 mod persist;

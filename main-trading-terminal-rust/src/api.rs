@@ -58,6 +58,12 @@ pub struct OrderRequest {
     pub symbol: String,
     #[serde(skip_serializing_if = "String::is_empty")]
     pub qty: String,
+    /// Dollar-sized crypto market orders ("$100 of BTC"). Mutually exclusive
+    /// with `qty`; valid on market orders only. Omitted entirely for every
+    /// other order so the simple stock/option serialization stays
+    /// byte-identical.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub notional: Option<String>,
     pub side: String,
     #[serde(rename = "type")]
     pub order_type: String,
@@ -101,7 +107,13 @@ pub struct Order {
     pub side: String,
     #[serde(rename = "type")]
     pub order_type: String,
+    /// Empty for notional crypto orders (Alpaca returns `qty: null` there) —
+    /// defaulted so one such order can't fail the whole orders fetch.
+    #[serde(default, deserialize_with = "de_null_string")]
     pub qty: String,
+    /// Dollar size of a notional crypto order; None everywhere else.
+    #[serde(default)]
+    pub notional: Option<String>,
     #[serde(default)]
     pub limit_price: Option<String>,
     pub status: String,
@@ -181,14 +193,37 @@ pub struct Bar {
     pub low: f64,
     #[serde(rename = "c")]
     pub close: f64,
-    #[serde(rename = "v")]
+    /// Crypto bars carry fractional volume (e.g. 2345.67 BTC), stock bars
+    /// integral — parse as f64 and truncate so one Bar type serves both.
+    #[serde(rename = "v", deserialize_with = "de_f64_as_i64")]
     pub volume: i64,
+}
+
+/// Accept either an integer or a float in JSON and truncate to i64.
+fn de_f64_as_i64<'de, D: serde::Deserializer<'de>>(d: D) -> Result<i64, D::Error> {
+    let v = f64::deserialize(d)?;
+    Ok(v as i64)
+}
+
+/// Accept a string or JSON null, mapping null to "".
+fn de_null_string<'de, D: serde::Deserializer<'de>>(d: D) -> Result<String, D::Error> {
+    let v: Option<String> = Option::deserialize(d)?;
+    Ok(v.unwrap_or_default())
 }
 
 #[derive(Debug, Deserialize)]
 struct BarsResponse {
     #[serde(default)]
     bars: Vec<Bar>,
+    #[serde(default)]
+    next_page_token: Option<String>,
+}
+
+/// Crypto bars come back keyed by pair: `{"bars": {"BTC/USD": [...]}}`.
+#[derive(Debug, Deserialize)]
+struct CryptoBarsResponse {
+    #[serde(default)]
+    bars: HashMap<String, Vec<Bar>>,
     #[serde(default)]
     next_page_token: Option<String>,
 }
@@ -290,6 +325,70 @@ struct OptionSnapshotsResponse {
     next_page_token: Option<String>,
 }
 
+// ---------------- Crypto ----------------
+//
+// Crypto data lives on `/v1beta3/crypto/us` (REST + WS); trading rides the
+// same `/v2/orders` / `/v2/positions` as everything else with
+// `asset_class == "crypto"`. See docs/adr/0002.
+
+/// Canonical Pair spelling is the slash form (`BTC/USD`) — it's what the data
+/// API and the tick cache key on. The TRADING API returns crypto symbols
+/// slashless (`BTCUSD`), so positions/orders are normalized through this at
+/// the API boundary. Known quote currencies are matched longest-first so
+/// `BTCUSDT` → `BTC/USDT`, not `BTCUSD` + trailing `T`.
+pub fn canonical_crypto_symbol(sym: &str) -> String {
+    if sym.contains('/') {
+        return sym.to_string();
+    }
+    for quote in ["USDT", "USDC", "USD", "BTC"] {
+        if let Some(base) = sym.strip_suffix(quote) {
+            if !base.is_empty() {
+                return format!("{}/{}", base, quote);
+            }
+        }
+    }
+    sym.to_string()
+}
+
+fn canonicalize_crypto_positions(mut v: Vec<Position>) -> Vec<Position> {
+    for p in &mut v {
+        if p.asset_class == "crypto" {
+            p.symbol = canonical_crypto_symbol(&p.symbol);
+        }
+    }
+    v
+}
+
+fn canonicalize_crypto_orders(mut v: Vec<Order>) -> Vec<Order> {
+    for o in &mut v {
+        if o.asset_class == "crypto" {
+            o.symbol = canonical_crypto_symbol(&o.symbol);
+        }
+    }
+    v
+}
+
+/// Per-pair snapshot from `/v1beta3/crypto/us/snapshots` — same wire shape as
+/// the options snapshot (quote/trade/daily bars), reusing the same inner
+/// frame types.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct CryptoSnapshot {
+    #[serde(default, rename = "latestQuote")]
+    pub latest_quote: Option<OptQuote>,
+    #[serde(default, rename = "latestTrade")]
+    pub latest_trade: Option<OptTrade>,
+    #[serde(default, rename = "dailyBar")]
+    pub daily_bar: Option<OptBar>,
+    #[serde(default, rename = "prevDailyBar")]
+    pub prev_daily_bar: Option<OptBar>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CryptoSnapshotsResponse {
+    #[serde(default)]
+    snapshots: HashMap<String, CryptoSnapshot>,
+}
+
 impl AlpacaClient {
     pub fn new(creds: Credentials) -> Self {
         let base_url = if creds.base_url.is_empty() {
@@ -347,7 +446,7 @@ impl AlpacaClient {
     pub fn get_positions(&self) -> Result<Vec<Position>> {
         let url = format!("{}/v2/positions", self.base_url);
         match self.auth(self.agent.get(&url)).call() {
-            Ok(r) => Self::handle_resp(r),
+            Ok(r) => Self::handle_resp(r).map(canonicalize_crypto_positions),
             Err(e) => Err(Self::handle_err(e)),
         }
     }
@@ -376,7 +475,7 @@ impl AlpacaClient {
     pub fn get_orders(&self) -> Result<Vec<Order>> {
         let url = format!("{}/v2/orders?status=open&limit=50", self.base_url);
         match self.auth(self.agent.get(&url)).call() {
-            Ok(r) => Self::handle_resp(r),
+            Ok(r) => Self::handle_resp(r).map(canonicalize_crypto_orders),
             Err(e) => Err(Self::handle_err(e)),
         }
     }
@@ -406,9 +505,46 @@ impl AlpacaClient {
             self.base_url
         );
         match self.auth(self.agent.get(&url)).call() {
+            Ok(r) => Self::handle_resp(r).map(canonicalize_crypto_orders),
+            Err(e) => Err(Self::handle_err(e)),
+        }
+    }
+
+    /// Tradable crypto asset list — the Crypto desk's Markets-grid universe
+    /// (the desk filters to USD-quoted Pairs).
+    pub fn get_crypto_assets(&self) -> Result<Vec<Asset>> {
+        let url = format!(
+            "{}/v2/assets?status=active&asset_class=crypto",
+            self.base_url
+        );
+        match self.auth(self.agent.get(&url)).call() {
             Ok(r) => Self::handle_resp(r),
             Err(e) => Err(Self::handle_err(e)),
         }
+    }
+
+    /// Bulk snapshots (quote/trade/daily bars) for a set of Pairs, keyed by
+    /// slash symbol. Initial fill + %chg source for the Markets grid; the
+    /// crypto WebSocket keeps displayed rows fresher than this.
+    pub fn get_crypto_snapshots(
+        &self,
+        symbols: &[String],
+    ) -> Result<HashMap<String, CryptoSnapshot>> {
+        if symbols.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let joined = symbols.join(",");
+        let url = format!(
+            "{}/v1beta3/crypto/us/snapshots?symbols={}",
+            ALPACA_DATA_BASE,
+            urlencode(&joined),
+        );
+        let resp = match self.auth(self.agent.get(&url)).call() {
+            Ok(r) => r,
+            Err(e) => return Err(Self::handle_err(e)),
+        };
+        let sr: CryptoSnapshotsResponse = Self::handle_resp(resp)?;
+        Ok(sr.snapshots)
     }
 
     pub fn get_assets(&self) -> Result<Vec<Asset>> {
@@ -505,6 +641,13 @@ impl AlpacaClient {
         start: DateTime<Utc>,
         end: DateTime<Utc>,
     ) -> Result<Vec<Bar>> {
+        // Pairs (slash symbols) branch to the crypto data API — same OHLCV
+        // shape, different host path + symbol-keyed response. The whole
+        // Chart/Compare stack upstream of this call is symbol-format
+        // agnostic. See docs/adr/0002.
+        if symbol.contains('/') {
+            return self.get_crypto_bars(symbol, timeframe, start, end);
+        }
         let mut all: Vec<Bar> = Vec::new();
         let mut page_token: Option<String> = None;
 
@@ -537,6 +680,110 @@ impl AlpacaClient {
             }
         }
         Ok(all)
+    }
+
+    /// Crypto bars from `/v1beta3/crypto/us/bars`. No `feed`/`adjustment`
+    /// params (those are stock concepts); the response keys bars by Pair.
+    fn get_crypto_bars(
+        &self,
+        symbol: &str,
+        timeframe: &str,
+        start: DateTime<Utc>,
+        end: DateTime<Utc>,
+    ) -> Result<Vec<Bar>> {
+        let mut all: Vec<Bar> = Vec::new();
+        let mut page_token: Option<String> = None;
+        loop {
+            let mut url = format!(
+                "{}/v1beta3/crypto/us/bars?symbols={}&timeframe={}&start={}&end={}&limit=10000",
+                ALPACA_DATA_BASE,
+                urlencode(symbol),
+                urlencode(timeframe),
+                urlencode(&start.to_rfc3339()),
+                urlencode(&end.to_rfc3339()),
+            );
+            if let Some(tok) = &page_token {
+                url.push_str("&page_token=");
+                url.push_str(&urlencode(tok));
+            }
+            let resp = match self.auth(self.agent.get(&url)).call() {
+                Ok(r) => r,
+                Err(e) => return Err(Self::handle_err(e)),
+            };
+            let br: CryptoBarsResponse = Self::handle_resp(resp)?;
+            if let Some(bars) = br.bars.into_values().next() {
+                all.extend(bars);
+            }
+            match br.next_page_token {
+                Some(t) if !t.is_empty() => page_token = Some(t),
+                _ => break,
+            }
+            if all.len() > 50_000 {
+                break;
+            }
+        }
+        Ok(all)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn canonical_crypto_symbol_inserts_slash() {
+        assert_eq!(canonical_crypto_symbol("BTCUSD"), "BTC/USD");
+        assert_eq!(canonical_crypto_symbol("ETHUSD"), "ETH/USD");
+        assert_eq!(canonical_crypto_symbol("AVAXUSD"), "AVAX/USD");
+    }
+
+    #[test]
+    fn canonical_crypto_symbol_matches_longest_quote_first() {
+        assert_eq!(canonical_crypto_symbol("BTCUSDT"), "BTC/USDT");
+        assert_eq!(canonical_crypto_symbol("ETHUSDC"), "ETH/USDC");
+        assert_eq!(canonical_crypto_symbol("ETHBTC"), "ETH/BTC");
+    }
+
+    #[test]
+    fn canonical_crypto_symbol_leaves_slash_form_alone() {
+        assert_eq!(canonical_crypto_symbol("BTC/USD"), "BTC/USD");
+    }
+
+    #[test]
+    fn canonical_crypto_symbol_never_empties_the_base() {
+        // "USD" alone must not become "/USD" — no quote suffix may eat the
+        // entire symbol.
+        assert_eq!(canonical_crypto_symbol("USD"), "USD");
+        assert_eq!(canonical_crypto_symbol("BTC"), "BTC");
+    }
+
+    #[test]
+    fn bar_volume_accepts_fractional_and_integral() {
+        let crypto = r#"{"t":"2026-01-05T00:00:00Z","o":1.0,"h":2.0,"l":0.5,"c":1.5,"v":2345.67}"#;
+        let b: Bar = serde_json::from_str(crypto).unwrap();
+        assert_eq!(b.volume, 2345);
+        let stock = r#"{"t":"2026-01-05T00:00:00Z","o":1.0,"h":2.0,"l":0.5,"c":1.5,"v":1234}"#;
+        let b: Bar = serde_json::from_str(stock).unwrap();
+        assert_eq!(b.volume, 1234);
+    }
+
+    #[test]
+    fn simple_order_serialization_omits_crypto_fields() {
+        // Load-bearing: Alpaca rejects unknown/wrong fields per order_type, so
+        // a plain market order must serialize without notional/stop/etc.
+        let req = OrderRequest {
+            symbol: "AAPL".into(),
+            qty: "10".into(),
+            side: "buy".into(),
+            order_type: "market".into(),
+            time_in_force: "day".into(),
+            ..Default::default()
+        };
+        let v = serde_json::to_value(&req).unwrap();
+        let obj = v.as_object().unwrap();
+        assert!(!obj.contains_key("notional"));
+        assert!(!obj.contains_key("stop_price"));
+        assert!(!obj.contains_key("limit_price"));
     }
 }
 

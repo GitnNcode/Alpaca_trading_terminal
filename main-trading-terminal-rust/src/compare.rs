@@ -206,6 +206,20 @@ impl CompareState {
 // ── Math ─────────────────────────────────────────────────────────────────
 
 const TRADING_DAYS_PER_YEAR: f64 = 252.0;
+/// Crypto trades around the clock — its daily-bar cadence is calendar days.
+const CRYPTO_DAYS_PER_YEAR: f64 = 365.25;
+
+/// Annualization cadence for a slot set. `aligned_closes` date-intersects the
+/// series, so any equity in the mix collapses everything to the 252-day
+/// equity calendar; only an all-crypto set keeps its 7-day weeks. Pure-equity
+/// behavior is byte-identical to the pre-crypto build.
+pub fn periods_per_year<S: AsRef<str>>(symbols: &[S]) -> f64 {
+    if !symbols.is_empty() && symbols.iter().all(|s| s.as_ref().contains('/')) {
+        CRYPTO_DAYS_PER_YEAR
+    } else {
+        TRADING_DAYS_PER_YEAR
+    }
+}
 
 pub fn daily_log_returns(closes: &[f64]) -> Vec<f64> {
     let mut out = Vec::with_capacity(closes.len().saturating_sub(1));
@@ -219,19 +233,19 @@ pub fn daily_log_returns(closes: &[f64]) -> Vec<f64> {
     out
 }
 
-pub fn cagr(closes: &[f64]) -> f64 {
+pub fn cagr(closes: &[f64], ppy: f64) -> f64 {
     if closes.len() < 2 || closes[0] <= 0.0 {
         return 0.0;
     }
     let total = closes[closes.len() - 1] / closes[0];
-    let years = (closes.len() - 1) as f64 / TRADING_DAYS_PER_YEAR;
+    let years = (closes.len() - 1) as f64 / ppy;
     if years <= 0.0 || total <= 0.0 {
         return 0.0;
     }
     total.powf(1.0 / years) - 1.0
 }
 
-pub fn annualized_vol(returns: &[f64]) -> f64 {
+pub fn annualized_vol(returns: &[f64], ppy: f64) -> f64 {
     if returns.len() < 2 {
         return 0.0;
     }
@@ -239,10 +253,10 @@ pub fn annualized_vol(returns: &[f64]) -> f64 {
     let mean: f64 = returns.iter().sum::<f64>() / n;
     let var: f64 =
         returns.iter().map(|r| (r - mean).powi(2)).sum::<f64>() / (n - 1.0);
-    var.sqrt() * TRADING_DAYS_PER_YEAR.sqrt()
+    var.sqrt() * ppy.sqrt()
 }
 
-pub fn sharpe(returns: &[f64]) -> f64 {
+pub fn sharpe(returns: &[f64], ppy: f64) -> f64 {
     if returns.len() < 2 {
         return 0.0;
     }
@@ -254,10 +268,10 @@ pub fn sharpe(returns: &[f64]) -> f64 {
     if sd == 0.0 {
         return 0.0;
     }
-    (mean / sd) * TRADING_DAYS_PER_YEAR.sqrt()
+    (mean / sd) * ppy.sqrt()
 }
 
-pub fn sortino(returns: &[f64]) -> f64 {
+pub fn sortino(returns: &[f64], ppy: f64) -> f64 {
     if returns.len() < 2 {
         return 0.0;
     }
@@ -272,7 +286,7 @@ pub fn sortino(returns: &[f64]) -> f64 {
         return 0.0;
     }
     let downside_sd = (downside_sq / n).sqrt();
-    (mean / downside_sd) * TRADING_DAYS_PER_YEAR.sqrt()
+    (mean / downside_sd) * ppy.sqrt()
 }
 
 /// Returns a negative value in [-1, 0]. 0 = no drawdown.
@@ -309,8 +323,8 @@ pub fn drawdown_series(closes: &[f64]) -> Vec<f64> {
     out
 }
 
-pub fn calmar(closes: &[f64]) -> f64 {
-    let c = cagr(closes);
+pub fn calmar(closes: &[f64], ppy: f64) -> f64 {
+    let c = cagr(closes, ppy);
     let dd = max_drawdown(closes).abs();
     if dd == 0.0 {
         return 0.0;
@@ -402,6 +416,7 @@ pub fn run_monte_carlo(
     horizon_years: u32,
     n_sims: usize,
     seed: u64,
+    ppy: f64,
 ) -> Option<MonteCarloResult> {
     let returns = daily_log_returns(closes);
     if returns.len() < 30 {
@@ -412,7 +427,9 @@ pub fn run_monte_carlo(
     let var: f64 =
         returns.iter().map(|r| (r - mu).powi(2)).sum::<f64>() / (n - 1.0);
     let sigma = var.sqrt();
-    let days = (horizon_years as usize) * (TRADING_DAYS_PER_YEAR as usize);
+    // ppy matches the input cadence: 252 simulated steps per year when the
+    // returns came from equity trading days, 365 for all-crypto series.
+    let days = (horizon_years as usize) * (ppy as usize);
     if days == 0 || n_sims == 0 {
         return None;
     }
@@ -497,28 +514,36 @@ pub fn run_monte_carlo(
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 
-/// Right-aligned closes across all slots so charts and metrics line up. Returns
-/// one Vec<f64> per slot, each of length `min_len`. Returns empty Vecs if
-/// any slot is empty or the alignment would produce fewer than 2 points.
+/// Date-intersected closes across all slots so charts and metrics line up.
+/// Each returned series holds only the dates present in EVERY slot, in time
+/// order, so all series share one length AND one calendar. This matters for
+/// mixed crypto + equity sets: crypto has 7-day weeks, equities 5 — a plain
+/// right-truncation by length would silently compare different calendar
+/// windows. Intersecting collapses mixed sets to the equity calendar; pure
+/// sets (all-equity or all-crypto, same history) behave as before. Returns
+/// empty Vecs if any slot is empty or fewer than 2 common dates exist.
 fn aligned_closes(slots: &[Slot]) -> Vec<Vec<f64>> {
-    let lens: Vec<usize> = slots
-        .iter()
-        .map(|s| s.bars.len())
-        .filter(|&n| n > 0)
-        .collect();
-    if lens.len() != slots.len() || lens.is_empty() {
+    if slots.is_empty() || slots.iter().any(|s| s.bars.is_empty()) {
         return slots.iter().map(|_| Vec::new()).collect();
     }
-    let min_len = *lens.iter().min().unwrap();
-    if min_len < 2 {
+    let mut common: std::collections::HashSet<chrono::NaiveDate> =
+        slots[0].bars.iter().map(|b| b.time.date_naive()).collect();
+    for s in &slots[1..] {
+        let dates: std::collections::HashSet<chrono::NaiveDate> =
+            s.bars.iter().map(|b| b.time.date_naive()).collect();
+        common.retain(|d| dates.contains(d));
+    }
+    if common.len() < 2 {
         return slots.iter().map(|_| Vec::new()).collect();
     }
     slots
         .iter()
         .map(|s| {
-            let bars = &s.bars;
-            let start = bars.len() - min_len;
-            bars[start..].iter().map(|b| b.close).collect()
+            s.bars
+                .iter()
+                .filter(|b| common.contains(&b.time.date_naive()))
+                .map(|b| b.close)
+                .collect()
         })
         .collect()
 }
@@ -584,6 +609,11 @@ pub fn render(
 
     let closes = aligned_closes(&state.slots);
     let ready = !closes.iter().any(|c| c.is_empty());
+    // Annualization cadence for THIS slot set — 365.25 only when every slot
+    // is a crypto Pair (mixed sets collapse to equity days via the date
+    // intersection in aligned_closes).
+    let symbols: Vec<&str> = state.slots.iter().map(|s| s.symbol.as_str()).collect();
+    let ppy = periods_per_year(&symbols);
 
     // When unlocked the plots own the wheel/drag events, so the outer
     // ScrollArea must release them — otherwise scrolling on a chart fights
@@ -592,16 +622,16 @@ pub fn render(
         .enable_scrolling(!state.interactive)
         .show(ui, |ui| {
         if ready {
-            render_stats_table(state, &closes, ui);
+            render_stats_table(state, &closes, ppy, ui);
             ui.add_space(8.0);
             render_normalized_and_drawdown(state, &closes, ui);
             ui.add_space(8.0);
             ui.columns(2, |cols| {
                 render_correlation(state, &closes, &mut cols[0]);
-                render_risk_return(state, &closes, &mut cols[1]);
+                render_risk_return(state, &closes, ppy, &mut cols[1]);
             });
             ui.add_space(8.0);
-            render_monte_carlo(state, &closes, ui);
+            render_monte_carlo(state, &closes, ppy, ui);
         } else if !state.slots.iter().any(|s| s.loading)
             && state.slots.iter().all(|s| s.err.is_empty())
         {
@@ -835,7 +865,7 @@ fn colored_value(ui: &mut egui::Ui, text: String, i: usize, best: Option<usize>,
     ui.label(rt);
 }
 
-fn render_stats_table(state: &CompareState, closes: &[Vec<f64>], ui: &mut egui::Ui) {
+fn render_stats_table(state: &CompareState, closes: &[Vec<f64>], ppy: f64, ui: &mut egui::Ui) {
     ui.add_space(4.0);
     ui.label(
         RichText::new(" METRICS ")
@@ -844,21 +874,21 @@ fn render_stats_table(state: &CompareState, closes: &[Vec<f64>], ui: &mut egui::
             .size(14.0),
     );
 
-    let cagrs: Vec<f64> = closes.iter().map(|c| cagr(c)).collect();
+    let cagrs: Vec<f64> = closes.iter().map(|c| cagr(c, ppy)).collect();
     let vols: Vec<f64> = closes
         .iter()
-        .map(|c| annualized_vol(&daily_log_returns(c)))
+        .map(|c| annualized_vol(&daily_log_returns(c), ppy))
         .collect();
     let sharpes: Vec<f64> = closes
         .iter()
-        .map(|c| sharpe(&daily_log_returns(c)))
+        .map(|c| sharpe(&daily_log_returns(c), ppy))
         .collect();
     let sortinos: Vec<f64> = closes
         .iter()
-        .map(|c| sortino(&daily_log_returns(c)))
+        .map(|c| sortino(&daily_log_returns(c), ppy))
         .collect();
     let max_dds: Vec<f64> = closes.iter().map(|c| max_drawdown(c)).collect();
-    let calmars: Vec<f64> = closes.iter().map(|c| calmar(c)).collect();
+    let calmars: Vec<f64> = closes.iter().map(|c| calmar(c, ppy)).collect();
 
     let bw_cagr = best_worst(&cagrs, Direction::HigherBetter);
     let bw_vol = best_worst(&vols, Direction::LowerBetter);
@@ -903,11 +933,18 @@ fn render_stats_table(state: &CompareState, closes: &[Vec<f64>], ui: &mut egui::
             }
         });
     ui.add_space(2.0);
+    let cadence = if ppy > 300.0 {
+        "365 days — 24/7 crypto"
+    } else {
+        "252 trading days"
+    };
     ui.label(
-        RichText::new("Best in green, worst in red. CAGR & volatility annualized from daily log returns (252 trading days).")
-            .color(theme::GRAY)
-            .size(11.0)
-            .italics(),
+        RichText::new(format!(
+            "Best in green, worst in red. CAGR & volatility annualized from daily log returns ({cadence})."
+        ))
+        .color(theme::GRAY)
+        .size(11.0)
+        .italics(),
     );
 }
 
@@ -1095,7 +1132,7 @@ fn lerp_color(a: Color32, b: Color32, t: f32) -> Color32 {
 
 // ── Risk/return scatter ─────────────────────────────────────────────────
 
-fn render_risk_return(state: &CompareState, closes: &[Vec<f64>], ui: &mut egui::Ui) {
+fn render_risk_return(state: &CompareState, closes: &[Vec<f64>], ppy: f64, ui: &mut egui::Ui) {
     ui.label(
         RichText::new(" RISK / RETURN ")
             .color(theme::ORANGE)
@@ -1118,8 +1155,8 @@ fn render_risk_return(state: &CompareState, closes: &[Vec<f64>], ui: &mut egui::
                 if series.is_empty() {
                     continue;
                 }
-                let vol = annualized_vol(&daily_log_returns(series));
-                let cgr = cagr(series);
+                let vol = annualized_vol(&daily_log_returns(series), ppy);
+                let cgr = cagr(series, ppy);
                 plot_ui.points(
                     Points::new(PlotPoints::new(vec![[vol, cgr]]))
                         .shape(MarkerShape::Circle)
@@ -1138,7 +1175,7 @@ fn render_risk_return(state: &CompareState, closes: &[Vec<f64>], ui: &mut egui::
 
 // ── Monte Carlo ─────────────────────────────────────────────────────────
 
-fn render_monte_carlo(state: &mut CompareState, closes: &[Vec<f64>], ui: &mut egui::Ui) {
+fn render_monte_carlo(state: &mut CompareState, closes: &[Vec<f64>], ppy: f64, ui: &mut egui::Ui) {
     let header = RichText::new(" MONTE CARLO GROWTH PROJECTION ")
         .color(theme::ORANGE)
         .strong()
@@ -1224,6 +1261,7 @@ fn render_monte_carlo(state: &mut CompareState, closes: &[Vec<f64>], ui: &mut eg
                         h,
                         state.mc_n_sims,
                         state.mc_seed,
+                        ppy,
                     );
                 }
             });
@@ -1236,9 +1274,10 @@ fn render_monte_carlo(state: &mut CompareState, closes: &[Vec<f64>], ui: &mut eg
                         .legend(Legend::default().background_alpha(0.35))
                         .show_axes([true, true])
                         .y_axis_formatter(|m, _| format!("{:.1}×", m.value))
-                        .x_axis_formatter(|m, _| {
-                            // Convert trading-day index to years.
-                            format!("{:.1}y", m.value / TRADING_DAYS_PER_YEAR)
+                        .x_axis_formatter(move |m, _| {
+                            // Convert simulated-step index to years at the
+                            // set's cadence (252 equity / 365 crypto days).
+                            format!("{:.1}y", m.value / ppy)
                         }),
                     state.interactive,
                 )
@@ -1354,8 +1393,58 @@ mod tests {
         for i in 1..=252 {
             closes.push(100.0 + i as f64 * (100.0 / 252.0));
         }
-        let c = cagr(&closes);
+        let c = cagr(&closes, 252.0);
         assert!(approx(c, 1.0, 0.02), "cagr={}", c);
+    }
+
+    #[test]
+    fn cagr_doubles_in_one_crypto_year_is_100pct() {
+        // 365 + 1 calendar-day closes at the crypto cadence → also 1 year.
+        let mut closes = vec![100.0];
+        for i in 1..=365 {
+            closes.push(100.0 + i as f64 * (100.0 / 365.0));
+        }
+        let c = cagr(&closes, 365.25);
+        assert!(approx(c, 1.0, 0.02), "cagr={}", c);
+    }
+
+    #[test]
+    fn periods_per_year_is_365_only_for_all_crypto() {
+        assert!(approx(periods_per_year(&["BTC/USD", "ETH/USD"]), 365.25, 1e-9));
+        // Any equity in the mix → 252 (the date intersection collapses the
+        // set to equity trading days).
+        assert!(approx(periods_per_year(&["BTC/USD", "AAPL"]), 252.0, 1e-9));
+        assert!(approx(periods_per_year(&["AAPL", "MSFT"]), 252.0, 1e-9));
+        // Degenerate: no slots → equity default.
+        assert!(approx(periods_per_year::<&str>(&[]), 252.0, 1e-9));
+    }
+
+    #[test]
+    fn aligned_closes_intersects_by_date_for_mixed_calendars() {
+        use chrono::{TimeZone, Utc};
+        let bar = |d: u32, c: f64| crate::api::Bar {
+            time: Utc.with_ymd_and_hms(2026, 6, d, 5, 0, 0).unwrap(),
+            open: c,
+            high: c,
+            low: c,
+            close: c,
+            volume: 0,
+        };
+        // Crypto trades the full week (Mon 2026-06-01 .. Sun 2026-06-07);
+        // the equity has only the five weekdays. Index-aligned truncation
+        // would pair Wed..Sun crypto bars against Mon..Fri equity bars —
+        // date intersection must instead drop the crypto weekend.
+        let mut crypto = Slot::new("BTC/USD".to_string());
+        for d in 1..=7 {
+            crypto.bars.push(bar(d, 100.0 + d as f64));
+        }
+        let mut equity = Slot::new("AAPL".to_string());
+        for d in 1..=5 {
+            equity.bars.push(bar(d, 200.0 + d as f64));
+        }
+        let aligned = aligned_closes(&[crypto, equity]);
+        assert_eq!(aligned[0], vec![101.0, 102.0, 103.0, 104.0, 105.0]);
+        assert_eq!(aligned[1], vec![201.0, 202.0, 203.0, 204.0, 205.0]);
     }
 
     #[test]
@@ -1393,9 +1482,9 @@ mod tests {
     #[test]
     fn calmar_is_cagr_over_max_dd_abs() {
         let closes = vec![100.0, 110.0, 120.0, 60.0, 90.0, 100.0, 150.0];
-        let cgr = cagr(&closes);
+        let cgr = cagr(&closes, 252.0);
         let dd = max_drawdown(&closes).abs();
-        let c = calmar(&closes);
+        let c = calmar(&closes, 252.0);
         if dd > 0.0 {
             assert!(approx(c, cgr / dd, 1e-9));
         }
@@ -1410,7 +1499,7 @@ mod tests {
             closes.push(last * 1.01);
         }
         let rets = daily_log_returns(&closes);
-        let v = annualized_vol(&rets);
+        let v = annualized_vol(&rets, 252.0);
         assert!(v < 1e-9, "vol={}", v);
     }
 
@@ -1441,7 +1530,7 @@ mod tests {
             let r = 0.0005 + 0.01 * rng.next_normal();
             closes.push(last * r.exp());
         }
-        let res = run_monte_carlo("X", &closes, 1, 500, 999).unwrap();
+        let res = run_monte_carlo("X", &closes, 1, 500, 999, 252.0).unwrap();
         for i in 0..res.median.len() {
             assert!(
                 res.p5[i] <= res.median[i] + 1e-9,

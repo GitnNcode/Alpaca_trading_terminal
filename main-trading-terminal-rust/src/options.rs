@@ -267,6 +267,7 @@ pub fn build_option_order(
     let req = OrderRequest {
         symbol: occ,
         qty: qty.to_string(),
+        notional: None,
         side: side_s,
         order_type,
         time_in_force: "day".to_string(),

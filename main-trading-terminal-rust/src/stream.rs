@@ -45,6 +45,14 @@ pub const STREAM_URL: &str = "wss://stream.data.alpaca.markets/v2/iex";
 /// by OCC symbol), so the same read loop handles both. See docs/adr/0001.
 pub const OPTIONS_STREAM_URL: &str = "wss://stream.data.alpaca.markets/v1beta1/indicative";
 
+/// Crypto market-data stream (free on every plan). Same frame format as the
+/// stock stream — trades `t` / quotes `q` / bars `b` keyed by Pair — except
+/// sizes/volumes are fractional. This stream is ALWAYS active (it has its own
+/// connection allowance, separate from the stock↔options single-connection
+/// handoff); its subscription set simply goes empty when nothing crypto is on
+/// screen. See docs/adr/0002.
+pub const CRYPTO_STREAM_URL: &str = "wss://stream.data.alpaca.markets/v1beta3/crypto/us";
+
 /// Minimum backoff between reconnect attempts. Doubles up to MAX_BACKOFF.
 const MIN_BACKOFF: Duration = Duration::from_secs(1);
 const MAX_BACKOFF: Duration = Duration::from_secs(30);
@@ -59,11 +67,13 @@ const READ_TIMEOUT: Duration = Duration::from_millis(50);
 #[derive(Debug, Clone, Default)]
 pub struct LastTick {
     pub last_price: Option<f64>,
-    pub last_size: Option<u64>,
+    /// f64 because crypto trades/quotes carry fractional sizes (0.0035 BTC);
+    /// stock sizes are integral but parse fine as f64.
+    pub last_size: Option<f64>,
     pub bid: Option<f64>,
-    pub bid_size: Option<u64>,
+    pub bid_size: Option<f64>,
     pub ask: Option<f64>,
-    pub ask_size: Option<u64>,
+    pub ask_size: Option<f64>,
     /// Most recent minute bar's OHLCV. Used by the Chart tab to morph the
     /// rightmost candle on intraday timeframes.
     pub last_bar: Option<MinuteBar>,
@@ -500,8 +510,9 @@ struct TradeFrame {
     symbol: String,
     #[serde(rename = "p")]
     price: f64,
+    // f64: crypto trade sizes are fractional; stock sizes parse fine as f64.
     #[serde(rename = "s", default)]
-    size: u64,
+    size: f64,
     #[serde(rename = "t")]
     timestamp: DateTime<Utc>,
 }
@@ -512,12 +523,13 @@ struct QuoteFrame {
     symbol: String,
     #[serde(rename = "bp")]
     bid_price: f64,
+    // f64 sizes — see TradeFrame.
     #[serde(rename = "bs", default)]
-    bid_size: u64,
+    bid_size: f64,
     #[serde(rename = "ap")]
     ask_price: f64,
     #[serde(rename = "as", default)]
-    ask_size: u64,
+    ask_size: f64,
     #[serde(rename = "t")]
     timestamp: DateTime<Utc>,
 }
@@ -552,7 +564,26 @@ mod tests {
         handle_payload(payload, &cache, &ctx).unwrap();
         let slot = cache.read().unwrap().get("AAPL").cloned().unwrap();
         assert_eq!(slot.last_price, Some(225.43));
-        assert_eq!(slot.last_size, Some(7));
+        assert_eq!(slot.last_size, Some(7.0));
+    }
+
+    #[test]
+    fn parses_crypto_frames_with_fractional_sizes() {
+        // Crypto trades/quotes carry fractional sizes — the frames must not
+        // reject them (they did when sizes were u64).
+        let cache = new_tick_cache();
+        let ctx = egui::Context::default();
+        let payload = r#"[
+            {"T":"t","S":"BTC/USD","p":67899.5,"s":0.0035,"t":"2026-01-05T13:30:00Z"},
+            {"T":"q","S":"ETH/USD","bp":3512.4,"bs":0.5,"ap":3513.1,"as":1.25,"t":"2026-01-05T13:30:00Z"}
+        ]"#;
+        handle_payload(payload, &cache, &ctx).unwrap();
+        let btc = cache.read().unwrap().get("BTC/USD").cloned().unwrap();
+        assert_eq!(btc.last_price, Some(67899.5));
+        assert_eq!(btc.last_size, Some(0.0035));
+        let eth = cache.read().unwrap().get("ETH/USD").cloned().unwrap();
+        assert_eq!(eth.bid, Some(3512.4));
+        assert_eq!(eth.ask_size, Some(1.25));
     }
 
     #[test]
@@ -564,8 +595,8 @@ mod tests {
         let slot = cache.read().unwrap().get("AAPL").cloned().unwrap();
         assert_eq!(slot.bid, Some(225.40));
         assert_eq!(slot.ask, Some(225.45));
-        assert_eq!(slot.bid_size, Some(2));
-        assert_eq!(slot.ask_size, Some(3));
+        assert_eq!(slot.bid_size, Some(2.0));
+        assert_eq!(slot.ask_size, Some(3.0));
     }
 
     #[test]
@@ -626,6 +657,36 @@ mod tests {
         eprintln!("--- phase 2: options ACTIVE, stock idle (5s) — expect clean options auth, no 406 ---");
         std::thread::sleep(Duration::from_secs(5));
         eprintln!("--- done ---");
+    }
+
+    #[test]
+    #[ignore] // TEMP — verifies ADR-0002's assumption that the crypto stream has its own
+              // connection allowance (stock + crypto concurrently, no 406). Close the app first.
+    fn live_crypto_and_stock_concurrent() {
+        let creds = crate::config::load_credentials().unwrap();
+        let client = std::sync::Arc::new(crate::api::AlpacaClient::new(creds));
+        let cache = new_tick_cache();
+        let (tx, _rx) = std::sync::mpsc::channel();
+        let ctx = egui::Context::default();
+
+        // Mirror the app: stock active AND crypto active, simultaneously.
+        let stock = spawn_stream(
+            client.clone(), tx.clone(), ctx.clone(), cache.clone(), STREAM_URL, true, true, true,
+        );
+        let crypto = spawn_stream(
+            client.clone(), tx.clone(), ctx.clone(), cache.clone(), CRYPTO_STREAM_URL, false, true, true,
+        );
+        stock
+            .send(SubMsg::SetSubscriptions(["AAPL".to_string()].into_iter().collect()))
+            .unwrap();
+        crypto
+            .send(SubMsg::SetSubscriptions(["BTC/USD".to_string()].into_iter().collect()))
+            .unwrap();
+        eprintln!("--- both ACTIVE for 8s — expect two clean auths, no 406, BTC/USD ticks (24/7) ---");
+        std::thread::sleep(Duration::from_secs(8));
+        let got_btc = cache.read().unwrap().contains_key("BTC/USD");
+        eprintln!("--- BTC/USD tick received: {got_btc} ---");
+        assert!(got_btc, "no BTC/USD data — crypto stream failed to connect/subscribe");
     }
 
     #[test]

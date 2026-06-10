@@ -108,6 +108,18 @@ pub fn render_sidebar(
         if ui.add(edit_btn).on_hover_text("Toggle edit mode").clicked() {
             state.editing = !state.editing;
         }
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if ui
+                .add(
+                    egui::Button::new(RichText::new(" « ").color(theme::GRAY2))
+                        .fill(theme::DARK),
+                )
+                .on_hover_text("Hide sidebar (reopen via ☰ WATCH in the top bar)")
+                .clicked()
+            {
+                state.collapsed = true;
+            }
+        });
     });
     ui.separator();
 
@@ -173,10 +185,17 @@ pub fn render_sidebar(
             };
 
             ui.horizontal(|ui| {
-                // Click target — symbol button on the left.
+                // Click target — symbol button on the left. Monospace-padded
+                // to 7 chars (covers "BTC/USD") so the price/Δ% columns line
+                // up row-to-row instead of drifting with ticker length.
                 let resp = ui.add(
-                    egui::Button::new(RichText::new(sym).color(theme::WHITE).strong())
-                        .fill(theme::DARK),
+                    egui::Button::new(
+                        RichText::new(format!("{:<7}", sym))
+                            .color(theme::WHITE)
+                            .strong()
+                            .monospace(),
+                    )
+                    .fill(theme::DARK),
                 );
                 if resp.clicked() {
                     outcome.load_symbol = Some(sym.clone());
@@ -194,10 +213,12 @@ pub fn render_sidebar(
                     let color = if p >= 0.0 { theme::GREEN } else { theme::RED };
                     let sign = if p >= 0.0 { "+" } else { "" };
                     ui.label(
-                        RichText::new(format!("{sign}{:.2}%", p)).color(color).monospace(),
+                        RichText::new(format!("{:>7}", format!("{sign}{:.2}%", p)))
+                            .color(color)
+                            .monospace(),
                     );
                 } else {
-                    ui.label(RichText::new(" — ").color(theme::GRAY).monospace());
+                    ui.label(RichText::new(format!("{:>7}", "—")).color(theme::GRAY).monospace());
                 }
                 let _ = chg; // Δ$ omitted in the cramped sidebar — pct is enough
 

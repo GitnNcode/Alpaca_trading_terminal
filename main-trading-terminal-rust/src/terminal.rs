@@ -271,13 +271,21 @@ impl TerminalState {
     /// time order so the caller can render markers in chronological order.
     pub fn fills_for_symbol(&self, symbol: &str) -> Vec<Fill> {
         let sym = symbol.to_ascii_uppercase();
+        // Crypto Pairs are canonically slash-form ("BTC/USD") but the activity
+        // feed reports them slashless ("BTCUSD") — match either spelling.
+        let sym_slashless = sym.replace('/', "");
         let mut out: Vec<Fill> = Vec::new();
         let mut seen_order_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
         for a in &self.activities {
             if a.activity_type != "FILL" && a.activity_type != "PARTIAL_FILL" {
                 continue;
             }
-            let sym_match = a.symbol.as_deref().map(|s| s.to_ascii_uppercase()) == Some(sym.clone());
+            let sym_match = a
+                .symbol
+                .as_deref()
+                .map(|s| s.to_ascii_uppercase())
+                .map(|s| s == sym || s == sym_slashless)
+                .unwrap_or(false);
             if !sym_match {
                 continue;
             }
@@ -1060,6 +1068,7 @@ fn build_order(f: &TradeForm) -> Option<(OrderRequest, String)> {
     let req = OrderRequest {
         symbol: sym,
         qty: qty.to_string(),
+        notional: None,
         side,
         order_type,
         time_in_force: "day".to_string(),
@@ -1602,6 +1611,7 @@ mod tests {
             side: side.to_string(),
             order_type: "market".to_string(),
             qty: qty.to_string(),
+            notional: None,
             limit_price: None,
             status: status.to_string(),
             filled_qty: qty.to_string(),
