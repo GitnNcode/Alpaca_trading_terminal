@@ -5,11 +5,11 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Alpaca Trading Terminal — native desktop terminal for Alpaca Markets</title>
   <meta name="description"
-        content="A native desktop trading terminal for Alpaca Markets. Live charts, multi-asset risk/return compare, and full order management in one fast Rust + egui app. Free download for macOS and Windows." />
+        content="A native desktop trading terminal for Alpaca Markets. Live charts, multi-asset risk/return compare, an options desk, a crypto desk, and full order management in one fast Rust + egui app. Free download for macOS and Windows." />
 
   <!-- Open Graph / social preview -->
   <meta property="og:title" content="Alpaca Trading Terminal" />
-  <meta property="og:description" content="Native desktop terminal for Alpaca Markets — charts, compare, and order management. Built in Rust." />
+  <meta property="og:description" content="Native desktop terminal for Alpaca Markets — charts, compare, options, crypto, and order management. Built in Rust." />
   <meta property="og:type" content="website" />
   <meta property="og:image" content="assets/logo.png" />
 
@@ -130,8 +130,8 @@
           </h1>
 
           <p class="mt-6 max-w-xl text-lg leading-relaxed text-mute">
-            Live charts, multi-asset risk/return compare, and full order management —
-            in one fast native window. Built in Rust with
+            Live charts, multi-asset risk/return compare, an options desk, a crypto desk,
+            and full order management — in one fast native window. Built in Rust with
             <span class="text-white">egui</span>, streaming real-time data over WebSocket.
             <span class="text-white">Paper trading by default.</span>
           </p>
@@ -176,6 +176,8 @@
               <span class="rounded px-2.5 py-1 text-mute">Trading Terminal</span>
               <span class="rounded bg-orange/15 px-2.5 py-1 font-semibold text-orange ring-1 ring-orange/40">Chart</span>
               <span class="rounded px-2.5 py-1 text-mute">Compare</span>
+              <span class="rounded px-2.5 py-1 text-mute">Options</span>
+              <span class="rounded px-2.5 py-1 text-mute">Crypto</span>
             </div>
             <!-- header data row -->
             <div class="flex flex-wrap items-baseline gap-x-4 gap-y-1 px-4 pt-3 font-mono text-xs">
@@ -248,8 +250,8 @@
     <section class="border-y border-line bg-coal">
       <div class="mx-auto grid max-w-6xl grid-cols-2 gap-px overflow-hidden md:grid-cols-4">
         <div class="px-5 py-7 text-center">
-          <div class="font-mono text-2xl font-bold text-orange">3 tabs</div>
-          <div class="mt-1 text-xs text-mute">Terminal · Chart · Compare</div>
+          <div class="font-mono text-2xl font-bold text-orange">5 tabs</div>
+          <div class="mt-1 text-xs text-mute">Terminal · Chart · Compare · Options · Crypto</div>
         </div>
         <div class="px-5 py-7 text-center">
           <div class="font-mono text-2xl font-bold text-cyan">7</div>
@@ -271,7 +273,7 @@
       <div class="reveal mx-auto max-w-2xl text-center">
         <h2 class="text-3xl font-bold tracking-tight sm:text-4xl">Everything in one window</h2>
         <p class="mt-4 text-mute">
-          Three workspaces over the Alpaca REST + data APIs, with a shared live tick cache,
+          Five workspaces over the Alpaca REST + data APIs, with a shared live tick cache,
           command palette, and watchlist riding along on every tab.
         </p>
       </div>
@@ -285,9 +287,11 @@
           </div>
           <h3 class="feature-title">TradingView-style charts</h3>
           <p class="feature-body">
-            Single-symbol multi-pane candlesticks with a shared X-axis and linked crosshair —
-            pan, zoom, or hover any pane and the rest follow. Latest-close line, OHLC tooltip,
-            and active-indicator chips in the header.
+            Multi-pane candlesticks — price, volume, RSI, MACD — with a shared X-axis and
+            linked crosshair: pan, zoom or hover any pane and the rest move in lockstep. A
+            right-side price scale that auto-fits the visible range, a live last-price tag,
+            a date/time axis under the bottom pane, and charting for stocks <em>and</em>
+            crypto pairs.
           </p>
         </article>
 
@@ -340,6 +344,33 @@
           </p>
         </article>
 
+        <!-- Card: Options desk -->
+        <article class="reveal feature-card" style="--reveal-delay:0ms">
+          <div class="feature-ico" style="color:#00bfff">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 10h18M12 10v10"/></svg>
+          </div>
+          <h3 class="feature-title">Options desk</h3>
+          <p class="feature-body">
+            Type an underlying, pick an expiration, and read a live calls/puts strike grid —
+            bid, ask, last, volume and open interest. Place single-leg market or limit orders
+            through the same confirm-before-fire modal, with live quotes overlaid from a
+            second WebSocket.
+          </p>
+        </article>
+
+        <!-- Card: Crypto desk -->
+        <article class="reveal feature-card" style="--reveal-delay:60ms">
+          <div class="feature-ico" style="color:#ffd700">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M9.5 8.5h4a2 2 0 0 1 0 4h-4m0 0h4.5a2 2 0 0 1 0 4H9.5m0-8V7m0 10v-1.5m2-9V7m0 10v-1.5"/></svg>
+          </div>
+          <h3 class="feature-title">Crypto desk</h3>
+          <p class="feature-body">
+            Every tradable USD pair in one live Markets grid — bid/ask/last, 24h change and
+            volume — that doubles as the trade ticket. Market, limit and stop-limit orders,
+            sized in fractional quantity or notional dollars, on an always-on 24/7 data stream.
+          </p>
+        </article>
+
         <!-- Card: Command palette + watchlist -->
         <article class="reveal feature-card" style="--reveal-delay:120ms">
           <div class="feature-ico" style="color:#ffd700">
@@ -388,16 +419,16 @@
 
             <!-- primary download = DMG (data-primary marks it as the hero target) -->
             <a class="dl-btn" data-primary download
-               data-file="Alpaca_Trading_Terminal_Rust.dmg" data-size="6.9 MB"
+               data-file="Alpaca_Trading_Terminal_Rust.dmg" data-size="7.4 MB"
                href="../binaries/main-trading-terminal-rust/Alpaca_Trading_Terminal_Rust.dmg">
               Download .dmg
-              <span class="dl-size">6.9 MB</span>
+              <span class="dl-size">7.4 MB</span>
             </a>
             <!-- secondary: raw universal binary -->
             <a class="dl-link" download
-               data-file="Alpaca_Trading_Terminal_Rust_MAC_UNIVERSAL" data-size="9.5 MB"
+               data-file="Alpaca_Trading_Terminal_Rust_MAC_UNIVERSAL" data-size="9.8 MB"
                href="../binaries/main-trading-terminal-rust/Alpaca_Trading_Terminal_Rust_MAC_UNIVERSAL">
-              or grab the universal binary <span class="text-mute2">(9.5 MB)</span>
+              or grab the universal binary <span class="text-mute2">(9.8 MB)</span>
             </a>
           </article>
 
@@ -412,10 +443,10 @@
             <p class="os-sub">Windows 10 / 11 · 64-bit · portable .exe</p>
 
             <a class="dl-btn" data-primary download
-               data-file="Alpaca_Trading_Terminal_Rust_WIN.exe" data-size="5.2 MB"
+               data-file="Alpaca_Trading_Terminal_Rust_WIN.exe" data-size="5.4 MB"
                href="../binaries/main-trading-terminal-rust/Alpaca_Trading_Terminal_Rust_WIN.exe">
               Download .exe
-              <span class="dl-size">5.2 MB</span>
+              <span class="dl-size">5.4 MB</span>
             </a>
             <p class="dl-link text-mute2">No install — double-click to run.</p>
           </article>
@@ -562,7 +593,7 @@ cargo build --release
               </div>
               <div class="mt-6 grid grid-cols-2 gap-4 border-t border-line pt-5 text-center font-mono">
                 <div>
-                  <div class="text-xl font-bold text-orange">16</div>
+                  <div class="text-xl font-bold text-orange">18</div>
                   <div class="text-[11px] text-mute">source files</div>
                 </div>
                 <div>

@@ -2,42 +2,58 @@
 
 A native desktop trading terminal for [Alpaca Markets](https://alpaca.markets/),
 built in Rust on [eframe / egui](https://github.com/emilk/egui) +
-[egui_plot](https://docs.rs/egui_plot). Three tabs in one fast window, with
-real-time data streaming over WebSocket. **Paper-trading by default.**
+[egui_plot](https://docs.rs/egui_plot). Five tabs in one fast window, with
+real-time data streaming over three WebSockets (stocks, options, crypto).
+**Paper-trading by default.**
 
 > Package name `alpaca-egui`; the window title and distributed binaries are
 > branded **Alpaca Trading Terminal**.
 
 ## Tabs
 
-The top strip switches between three workspaces (default tab is **Trading
+The top strip switches between five workspaces (default tab is **Trading
 Terminal**):
 
 - **Trading Terminal** — account-management surface with `Positions / Trade /
   Orders / Activity` sub-tabs. Place market, limit, stop, stop-limit,
   trailing-stop and bracket orders; every order and cancel routes through a
   confirm-before-fire modal. Positions re-price P&L live between snapshots.
-- **Chart** — single-symbol, TradingView-style multi-pane chart. Price +
-  overlays, volume, RSI and MACD panes share one X-axis and a linked crosshair
-  (pan/zoom/hover any pane and the rest follow). Live OHLC + change header with
-  active-indicator chips, latest-close line, and a floating OHLC tooltip.
+- **Chart** — single-symbol, TradingView-style multi-pane chart for stocks
+  **and crypto pairs** (`BTC/USD`). Price + overlays, volume, RSI and MACD panes
+  share one X-axis and a linked crosshair: pan/zoom/hover any pane and the rest
+  move in lockstep. Right-side price scale that auto-fits to the visible range, a
+  live last-price tag, a date/time axis under the bottom-most pane, OHLC + change
+  header with active-indicator chips, and a floating OHLC tooltip.
 - **Compare** — multi-asset risk/return: normalized return lines, drawdown,
   correlation heatmap, risk/return scatter, and a Monte Carlo growth projection
   (inline `Xorshift64` + Box-Muller). Series are aligned to a common history so
   the math lines up.
+- **Options** — an options desk with `Chain / Positions / Orders` sub-tabs. Type
+  an underlying, pick an expiration, and read a live calls/puts strike grid
+  (bid/ask/last/volume/OI). Place single-leg market or limit orders through the
+  same confirm-before-fire modal, with live quotes overlaid from a second
+  WebSocket. Reach it from the palette with `OPT <TICKER>`.
+- **Crypto** — a 24/7 crypto desk with `Markets / Positions / Orders` sub-tabs.
+  Every tradable USD pair in one live Markets grid (bid/ask/last, 24h %, volume)
+  that doubles as the trade ticket: market / limit / stop-limit orders sized in
+  fractional quantity or notional dollars, on an always-on data stream. Reach it
+  with `CRY [<PAIR>]`.
 
 ## Across every tab
 
-- **Live data stream** — a dedicated WebSocket thread
-  (`wss://stream.data.alpaca.markets/v2/iex`) parses trades / quotes / minute
-  bars into a shared tick cache. Charts patch tick-by-tick; the positions table
-  re-prices on every frame.
+- **Live data streams** — three dedicated WebSocket threads (stocks on
+  `/v2/iex`, options on `/v1beta1/indicative`, crypto on `/v1beta3/crypto/us`)
+  parse trades / quotes / minute bars into one shared tick cache. Charts patch
+  tick-by-tick; the positions table re-prices on every frame. The stock and
+  options feeds hand off Alpaca's single connection as you switch tabs; the
+  crypto feed has its own allowance and stays always-on.
 - **Command palette** — press `/` for a Bloomberg-style command bar to jump
   symbols and tabs (pure, fully unit-tested parser).
 - **Watchlist + ticker tape** — mounted on every tab, riding the same tick
   cache; the symbol list persists.
-- **State persistence** — last symbol, ranges, indicator toggles, compare slots
-  and watchlist are debounced-saved to `{config_dir}/alpaca-tui/state.json`.
+- **State persistence** — last symbol, ranges, indicator toggles, compare slots,
+  watchlist (and whether it's collapsed), last options underlying and last crypto
+  pair are debounced-saved to `{config_dir}/alpaca-tui/state.json`.
 
 ## Indicators (Chart tab)
 
@@ -106,7 +122,8 @@ preview.)
 ## Tests
 
 ```bash
-cargo test                     # indicator + compare + command-palette math
+cargo test   # indicators + compare math + terminal/options/crypto order-build
+             # + command parser + OCC/chain + date-intersection alignment
 ```
 
 ## Project layout
@@ -120,11 +137,13 @@ main-trading-terminal-rust/
 │   ├── terminal.rs   # Trading Terminal tab — positions/trade/orders/activity
 │   ├── chart.rs      # multi-pane plots, linked axis + cursor, live patching
 │   ├── compare.rs    # multi-asset compare + Monte Carlo (Xorshift64)
+│   ├── options.rs    # Options desk — chain grid, OCC orders, live quotes
+│   ├── crypto.rs     # Crypto desk — USD-pair markets grid + order ticket
 │   ├── indicators.rs # SMA / EMA / BB / RSI / MACD / VWAP / ATR + tests
 │   ├── strategies.rs # signal strategies (MA-cross / BB / MACD)
 │   ├── command.rs    # pure command-palette parser
 │   ├── workers.rs    # background HTTP threads → mpsc Msg channel
-│   ├── stream.rs     # live WebSocket thread → shared tick cache
+│   ├── stream.rs     # live WebSocket threads → shared tick cache
 │   ├── api.rs        # Alpaca REST client (account/orders/positions/bars/…)
 │   ├── stocks.rs     # asset cache + symbol autocomplete
 │   ├── watchlist.rs  # watchlist side panel + ticker tape
@@ -136,7 +155,8 @@ main-trading-terminal-rust/
 
 ## History
 
-This started as a chart-only egui experiment and grew into the full three-tab
-terminal above (Trading Terminal + Chart + Compare). The folder was also renamed
-from `chart-compare-gui-rust/` to `main-trading-terminal-rust/`; older docs may
-still reference the previous name.
+This started as a chart-only egui experiment and grew into the full five-tab
+terminal above (Trading Terminal + Chart + Compare + Options + Crypto). The
+folder was also renamed from `chart-compare-gui-rust/` to
+`main-trading-terminal-rust/`; older docs may still reference the previous name
+or the earlier three-tab layout.
