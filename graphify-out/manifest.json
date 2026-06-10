@@ -240,9 +240,9 @@
     "semantic_hash": ""
   },
   "main-trading-terminal-rust/README.md": {
-    "mtime": 1780740056.16918,
-    "ast_hash": "c664594071fe84893a169a82ed4157a8",
-    "semantic_hash": "c664594071fe84893a169a82ed4157a8"
+    "mtime": 1781123649.0951824,
+    "ast_hash": "6e175833e44b04c8bc27f247d6ddff93",
+    "semantic_hash": ""
   },
   "app_logo.png": {
     "mtime": 1779121623.844533,
@@ -260,9 +260,9 @@
     "semantic_hash": "a06168b717b149acbb0f5903d41503df"
   },
   "website/index.html": {
-    "mtime": 1780737641.2286346,
-    "ast_hash": "342309234a9e28051969faba74e013f8",
-    "semantic_hash": "342309234a9e28051969faba74e013f8"
+    "mtime": 1781123568.5393364,
+    "ast_hash": "f08b101502c397a111abfb978ba25972",
+    "semantic_hash": ""
   },
   "website/assets/logo.png": {
     "mtime": 1780736160.7614958,
@@ -290,8 +290,8 @@
     "semantic_hash": ""
   },
   "main-trading-terminal-rust/.claude/settings.local.json": {
-    "mtime": 1781079321.8775904,
-    "ast_hash": "0fcc8665e572ab7be3dc76db735a1775",
+    "mtime": 1781122923.9196472,
+    "ast_hash": "b33a7de3da9ea9eaee2c090726fa3d6a",
     "semantic_hash": ""
   },
   "main-trading-terminal-rust/src/crypto.rs": {

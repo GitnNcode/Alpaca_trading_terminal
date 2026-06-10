@@ -125,29 +125,29 @@
     "semantic_hash": "1f16ea11cfebf4141c6357ac724bcbc9"
   },
   "main-trading-terminal-rust/src/api.rs": {
-    "mtime": 1780898514.7281117,
-    "ast_hash": "302ecbad5fe4ae9a01a28c2d7886fdc7",
+    "mtime": 1781032789.9225738,
+    "ast_hash": "b13839bb0ffd0af689c431b3ed957533",
     "semantic_hash": ""
   },
   "main-trading-terminal-rust/src/app.rs": {
-    "mtime": 1780989542.0593464,
-    "ast_hash": "6a1dc191fb254fe03ab6c3c1e5d3fe54",
+    "mtime": 1781079683.883586,
+    "ast_hash": "108daf70b2659bde9774f2c9d0ccc660",
     "semantic_hash": ""
   },
   "main-trading-terminal-rust/src/chart.rs": {
-    "mtime": 1779915214.1968873,
-    "ast_hash": "ed0d17437829a4903c3262377eb1b54e",
-    "semantic_hash": "ed0d17437829a4903c3262377eb1b54e"
+    "mtime": 1781081732.6941893,
+    "ast_hash": "f86508e93d5e7d38cb9098ff6467dbcd",
+    "semantic_hash": ""
   },
   "main-trading-terminal-rust/src/command.rs": {
-    "mtime": 1780897322.7203262,
-    "ast_hash": "6f63c070d08610b0b352b1654fafb5ed",
+    "mtime": 1781032572.6186738,
+    "ast_hash": "af2ad9c7d1d5e48370ee52af9a002258",
     "semantic_hash": ""
   },
   "main-trading-terminal-rust/src/compare.rs": {
-    "mtime": 1779210293.012729,
-    "ast_hash": "bc98578b970c16d134440c4f0a3d2eed",
-    "semantic_hash": "bc98578b970c16d134440c4f0a3d2eed"
+    "mtime": 1781034184.836696,
+    "ast_hash": "e303143f8973d47b442367227d18da28",
+    "semantic_hash": ""
   },
   "main-trading-terminal-rust/src/config.rs": {
     "mtime": 1779428989.4428556,
@@ -160,13 +160,13 @@
     "semantic_hash": "dbb6b20939c696bdfd21eba9f23ffe60"
   },
   "main-trading-terminal-rust/src/main.rs": {
-    "mtime": 1780897681.2734175,
-    "ast_hash": "5b5e353369ffdae2667e0434f0cabef0",
+    "mtime": 1781032791.0818956,
+    "ast_hash": "dbfc6e5a0b5614ce8685c27bf4303174",
     "semantic_hash": ""
   },
   "main-trading-terminal-rust/src/persist.rs": {
-    "mtime": 1780897300.6750405,
-    "ast_hash": "9b89e52eae5fde3688979919f07934b2",
+    "mtime": 1781079594.366238,
+    "ast_hash": "268b769b20510dd06770abafce5e9756",
     "semantic_hash": ""
   },
   "main-trading-terminal-rust/src/stocks.rs": {
@@ -180,13 +180,13 @@
     "semantic_hash": "bca738100f142dd346b809769d1e75a0"
   },
   "main-trading-terminal-rust/src/stream.rs": {
-    "mtime": 1780989638.6755455,
-    "ast_hash": "609c50e4ed9190bdcb712b1630773296",
+    "mtime": 1781032450.947275,
+    "ast_hash": "b07d2e4db29729662887ce03fff70ba1",
     "semantic_hash": ""
   },
   "main-trading-terminal-rust/src/terminal.rs": {
-    "mtime": 1780897912.2178407,
-    "ast_hash": "4b7353ddd73b6add7a9631f9c4ef992e",
+    "mtime": 1781032981.9236264,
+    "ast_hash": "1489acf81aa94e0f0283d7163257ef89",
     "semantic_hash": ""
   },
   "main-trading-terminal-rust/src/theme.rs": {
@@ -195,13 +195,13 @@
     "semantic_hash": "c26ce48e5b4567f402e023c14e3671b7"
   },
   "main-trading-terminal-rust/src/watchlist.rs": {
-    "mtime": 1779216391.0755887,
-    "ast_hash": "998fa1c5438dff4231e7ed9889c41caa",
-    "semantic_hash": "998fa1c5438dff4231e7ed9889c41caa"
+    "mtime": 1781079612.0729508,
+    "ast_hash": "dd3675b7c0b842eb2b8d12572cde62a1",
+    "semantic_hash": ""
   },
   "main-trading-terminal-rust/src/workers.rs": {
-    "mtime": 1780897287.2423308,
-    "ast_hash": "5c2c4f6f828d9f61482ea87987d0a306",
+    "mtime": 1781033879.8835084,
+    "ast_hash": "cf130979143575053172d5cf790d850a",
     "semantic_hash": ""
   },
   ".claude/skills/claude-md-writer/SKILL.md": {
@@ -235,8 +235,8 @@
     "semantic_hash": "dca7c7a733b5b5432349016ab9f95ef4"
   },
   "main-trading-terminal-rust/CLAUDE.md": {
-    "mtime": 1780898670.0737894,
-    "ast_hash": "f7145f5b28d802a24a90bd1ead808313",
+    "mtime": 1781081819.3735456,
+    "ast_hash": "7378e0c278382c0d94020dd9b0d43bac",
     "semantic_hash": ""
   },
   "main-trading-terminal-rust/README.md": {
@@ -275,18 +275,33 @@
     "semantic_hash": "9e6dc7215076ddbbeecd1d5cdbf0b5a9"
   },
   "main-trading-terminal-rust/src/options.rs": {
-    "mtime": 1780898538.295944,
-    "ast_hash": "969126e91520a913f1e6332907c56196",
+    "mtime": 1781032484.2942715,
+    "ast_hash": "e759a51f1df48ee20ec2ec96817e49ca",
     "semantic_hash": ""
   },
   "main-trading-terminal-rust/CONTEXT.md": {
-    "mtime": 1780896713.1094682,
-    "ast_hash": "3df46f8055854d06a6d4b3c5e335d3a5",
+    "mtime": 1781031580.1752756,
+    "ast_hash": "8d48fc61475c44aed36594a33b081243",
     "semantic_hash": ""
   },
   "main-trading-terminal-rust/docs/adr/0001-options-chain-hybrid-rest-snapshot-plus-live-ws.md": {
     "mtime": 1780896706.5090375,
     "ast_hash": "a662c33ed66e11b2d1ae2988cabcad82",
+    "semantic_hash": ""
+  },
+  "main-trading-terminal-rust/.claude/settings.local.json": {
+    "mtime": 1781079321.8775904,
+    "ast_hash": "0fcc8665e572ab7be3dc76db735a1775",
+    "semantic_hash": ""
+  },
+  "main-trading-terminal-rust/src/crypto.rs": {
+    "mtime": 1781032947.9311533,
+    "ast_hash": "6267525f0b1294007e5a1c8bc0eac3de",
+    "semantic_hash": ""
+  },
+  "main-trading-terminal-rust/docs/adr/0002-always-warm-crypto-stream-full-chart-integration.md": {
+    "mtime": 1781032296.968328,
+    "ast_hash": "34d422ad0345722216045a736e0a0352",
     "semantic_hash": ""
   }
 }
