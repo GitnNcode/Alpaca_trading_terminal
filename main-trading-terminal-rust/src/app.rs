@@ -36,6 +36,25 @@ fn palette_tooltip_text() -> String {
     out
 }
 
+/// Format an order-placement failure, appending an actionable hint when Alpaca
+/// rejected it as a potential wash trade (HTTP 403, "potential wash trade
+/// detected. use complex orders"). That rejection means an opposing open order
+/// already exists on the same symbol — a plain order could cross against it, so
+/// Alpaca blocks it. The fix is to cancel that order or resubmit as a
+/// bracket/OCO, so we keep Alpaca's raw text and append the how-to. Shared by
+/// the Terminal / Options / Crypto `*OrderPlaced` error arms so all three desks
+/// surface the same guidance.
+fn place_failure_msg(req_summary: &str, e: impl std::fmt::Display) -> String {
+    let msg = format!("Failed to place {req_summary}: {e}");
+    if msg.to_ascii_lowercase().contains("wash trade") {
+        format!(
+            "{msg}\nYou have an opposing open order on this symbol — cancel it in Orders, or resubmit as a bracket order."
+        )
+    } else {
+        msg
+    }
+}
+
 /// Reference list of function codes for the palette tooltip + help overlay +
 /// autocomplete. Single source of truth — adding a new code here is enough
 /// to surface it in all three places. The first element is the typed prefix,
@@ -53,6 +72,7 @@ const PALETTE_FUNCS: &[(&str, &str)] = &[
     ("CRY [<PAIR>]",        "Crypto desk — markets grid; CRY BTC = BTC/USD"),
     ("WATCH <TICKER>",      "add to watchlist (Pairs too: WATCH BTC/USD)"),
     ("API CHANGE",          "re-enter API key / secret / paper-or-live"),
+    ("API KEYS / API COPY", "show stored API key + secret, each with a copy button"),
     ("HELP / ?",            "show this help overlay"),
 ];
 
@@ -280,6 +300,10 @@ pub struct ChartApp {
     pub command_status: Option<(String, egui::Color32)>,
     /// `?` / HELP toggles a help overlay.
     pub command_help_open: bool,
+    /// `API KEYS` toggles a read-only modal that lists the stored API key +
+    /// secret, each with a copy-to-clipboard button. Display-only — never
+    /// mutates credentials (that's the `creds_modal_*` flow / `ApiChange`).
+    pub keys_modal_open: bool,
     /// Per-frame autocomplete suggestions for the palette. Recomputed each
     /// frame from `command_input` + AssetCache + `PALETTE_FUNCS`; cleared on
     /// dispatch / Esc / chip click.
@@ -456,6 +480,7 @@ impl ChartApp {
             command_error: None,
             command_status: None,
             command_help_open: false,
+            keys_modal_open: false,
             command_suggestions: Vec::new(),
             creds_modal_open: need_setup,
             creds_modal_first_run: need_setup,
@@ -512,6 +537,7 @@ impl ChartApp {
         match c {
             Command::Noop => {}
             Command::Help => self.command_help_open = true,
+            Command::ApiKeys => self.keys_modal_open = true,
             Command::LoadSymbol(sym) => {
                 self.symbol_input = sym;
                 self.current_tab = Tab::Chart;
@@ -982,6 +1008,75 @@ impl ChartApp {
                     }
                 });
         }
+
+        // API-keys modal — opened by `API KEYS` / `API COPY`. Read-only view of
+        // the stored credentials with a Copy button per field, so the keys the
+        // app already loaded (from the shared credentials.json) can be lifted
+        // into another tool without retyping. Dismissed by Esc / CLOSE.
+        if self.keys_modal_open {
+            // Snapshot the real values once; the text boxes bind to throwaway
+            // clones so the fields stay read-only (any keystroke is discarded
+            // next frame) while still being selectable. Copy buttons copy the
+            // snapshot, never the (possibly half-edited) box contents.
+            let api_key = self.client.api_key.clone();
+            let api_secret = self.client.api_secret.clone();
+            let mut key_box = api_key.clone();
+            let mut secret_box = api_secret.clone();
+            egui::Window::new("API keys")
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                .collapsible(false)
+                .resizable(false)
+                .show(ctx, |ui| {
+                    if api_key.trim().is_empty() && api_secret.trim().is_empty() {
+                        ui.label(
+                            RichText::new("No API keys stored yet — use  API CHANGE  to set them.")
+                                .color(theme::ORANGE),
+                        );
+                    } else {
+                        ui.label(
+                            RichText::new("Stored credentials — copy for reuse elsewhere.")
+                                .color(theme::WHITE),
+                        );
+                        ui.add_space(8.0);
+                        egui::Grid::new("api_keys_grid")
+                            .num_columns(3)
+                            .spacing([8.0, 8.0])
+                            .show(ui, |ui| {
+                                ui.label(
+                                    RichText::new("API Key").color(theme::ORANGE).monospace(),
+                                );
+                                ui.add(
+                                    egui::TextEdit::singleline(&mut key_box)
+                                        .desired_width(380.0)
+                                        .font(egui::TextStyle::Monospace),
+                                );
+                                if ui.button(" Copy ").clicked() {
+                                    ui.ctx().copy_text(api_key.clone());
+                                }
+                                ui.end_row();
+
+                                ui.label(
+                                    RichText::new("API Secret").color(theme::ORANGE).monospace(),
+                                );
+                                ui.add(
+                                    egui::TextEdit::singleline(&mut secret_box)
+                                        .desired_width(380.0)
+                                        .font(egui::TextStyle::Monospace),
+                                );
+                                if ui.button(" Copy ").clicked() {
+                                    ui.ctx().copy_text(api_secret.clone());
+                                }
+                                ui.end_row();
+                            });
+                    }
+                    ui.add_space(8.0);
+                    if ui.button(" CLOSE ").clicked()
+                        || ui.input(|i| i.key_pressed(Key::Escape))
+                    {
+                        self.keys_modal_open = false;
+                    }
+                });
+        }
     }
 
     /// Recompute the palette autocomplete suggestions from the current
@@ -1023,6 +1118,8 @@ impl ChartApp {
                 "ACTIVITY",
                 "HELP",
                 "API CHANGE",
+                "API KEYS",
+                "API COPY",
             ];
             for c in CODES {
                 if c.starts_with(prefix) && *c != prefix {
@@ -1346,10 +1443,8 @@ impl ChartApp {
                             );
                         }
                         Err(e) => {
-                            self.terminal.form.result = format!(
-                                "Failed to place {}: {}",
-                                req_summary, e
-                            );
+                            self.terminal.form.result =
+                                place_failure_msg(&req_summary, e);
                             self.terminal.form.result_color = theme::RED;
                         }
                     }
@@ -1468,7 +1563,7 @@ impl ChartApp {
                         }
                         Err(e) => {
                             self.options.form.result =
-                                format!("Failed to place {}: {}", req_summary, e);
+                                place_failure_msg(&req_summary, e);
                             self.options.form.result_color = theme::RED;
                         }
                     }
@@ -1563,7 +1658,7 @@ impl ChartApp {
                         }
                         Err(e) => {
                             self.crypto.form.result =
-                                format!("Failed to place {}: {}", req_summary, e);
+                                place_failure_msg(&req_summary, e);
                             self.crypto.form.result_color = theme::RED;
                         }
                     }
@@ -2156,5 +2251,36 @@ impl ChartApp {
         }
         self.autocomplete = self.assets.filter(&self.symbol_input, 8);
         self.autocomplete_open = !self.autocomplete.is_empty();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn wash_trade_error_gets_actionable_hint() {
+        let msg = place_failure_msg(
+            "BUY 30 AMZN @ MARKET (DAY)",
+            "API error 403: potential wash trade detected. use complex orders",
+        );
+        // Alpaca's raw text is preserved …
+        assert!(msg.contains("potential wash trade detected"));
+        // … and our how-to is appended.
+        assert!(msg.contains("cancel it in Orders"));
+        assert!(msg.contains("bracket order"));
+    }
+
+    #[test]
+    fn ordinary_error_is_passed_through_unchanged() {
+        let msg = place_failure_msg(
+            "BUY 30 AMZN @ MARKET (DAY)",
+            "API error 422: insufficient buying power",
+        );
+        assert_eq!(
+            msg,
+            "Failed to place BUY 30 AMZN @ MARKET (DAY): \
+             API error 422: insufficient buying power"
+        );
     }
 }

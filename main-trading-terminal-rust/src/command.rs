@@ -18,6 +18,7 @@
 //   CRY [<PAIR>]              → Crypto desk; bare coin normalizes to /USD
 //   WATCH <TICKER>            → add to watchlist (accepts Pairs: BTC/USD)
 //   API CHANGE / API          → open the credentials modal to re-enter keys
+//   API KEYS / API COPY       → show stored API key + secret with copy buttons
 //   HELP / ?                  → show the help overlay
 //
 // Anything else parses to `Command::Unknown(input)` so the renderer can
@@ -42,6 +43,12 @@ pub enum Command {
     /// flip between paper and live. Mutation lives in `dispatch_command`;
     /// this variant is just the dispatch token.
     ApiChange,
+    /// `API KEYS` / `API COPY` — pop a read-only modal listing the stored API
+    /// key + secret, each with a copy-to-clipboard button. Reuse-friendly: lift
+    /// the keys the app already loaded (from the shared credentials.json) into
+    /// another tool without retyping. Pure display — never mutates credentials
+    /// (that's `ApiChange`). Rendering lives in `app.rs`.
+    ApiKeys,
     Help,
     Noop,
     Unknown(String),
@@ -161,12 +168,14 @@ pub fn parse(input: &str) -> Command {
             }
         }
         "API" => {
-            // "API" alone or "API CHANGE" both pop the credentials modal.
+            // "API" alone or "API CHANGE" both pop the credentials modal;
+            // "API KEYS" / "API COPY" pops the read-only copy-keys modal.
             // Any other follow-up token is treated as a typo so the user
-            // sees a clear error instead of accidentally opening the modal.
+            // sees a clear error instead of accidentally opening a modal.
             match tokens.first().map(|t| t.to_ascii_uppercase()).as_deref() {
                 None => Command::ApiChange,
                 Some("CHANGE") if tokens.len() == 1 => Command::ApiChange,
+                Some("KEYS" | "COPY") if tokens.len() == 1 => Command::ApiKeys,
                 _ => Command::Unknown(input.to_string()),
             }
         }
@@ -381,9 +390,18 @@ mod tests {
     }
 
     #[test]
+    fn api_keys_opens_copy_modal() {
+        assert_eq!(parse("api keys"), Command::ApiKeys);
+        assert_eq!(parse("API KEYS"), Command::ApiKeys);
+        assert_eq!(parse("api copy"), Command::ApiKeys);
+        assert_eq!(parse("  Api   Copy  "), Command::ApiKeys);
+    }
+
+    #[test]
     fn api_with_garbage_arg_is_unknown() {
         assert_eq!(parse("api foo"), Command::Unknown("api foo".into()));
         assert_eq!(parse("api change extra"), Command::Unknown("api change extra".into()));
+        assert_eq!(parse("api keys extra"), Command::Unknown("api keys extra".into()));
     }
 
     #[test]

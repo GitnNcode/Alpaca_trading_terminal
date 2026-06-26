@@ -10,13 +10,14 @@ Five-tab desktop GUI:
 ## Stack
 - Rust 2021, `eframe` 0.29 + `egui` 0.29 + `egui_plot` 0.29
 - `ureq` for HTTP, `tungstenite` 0.24 (native-tls) for the live data WebSocket, `chrono`, `serde` / `serde_json`, `csv`, `dirs`, `anyhow`
-- 18 source files in [src/](src/), 104 tests
+- 18 source files in [src/](src/), 109 tests
 
 ## Commands (run from this directory)
 - Build: `cargo build --release` (output: `target/release/alpaca-egui`)
 - Run: `cargo run --release`
 - Reset stored credentials: `cargo run --release -- --reset`
-- Test: `cargo test` (106 tests — indicators + compare math + terminal order-build + command parser + options OCC/chain/order-build + crypto pair/order-build/symbol-canonicalization + date-intersection alignment + chart axis/visible-window helpers)
+- Copy stored API keys: type `API KEYS` (or `API COPY`) in the command palette — pops a read-only modal showing the key + secret, each with a Copy button (renders next to the help overlay in [src/app.rs](src/app.rs); `Command::ApiKeys` in [src/command.rs](src/command.rs))
+- Test: `cargo test` (109 tests — indicators + compare math + terminal order-build + command parser + options OCC/chain/order-build + crypto pair/order-build/symbol-canonicalization + date-intersection alignment + chart axis/visible-window helpers)
 - Live-probe tests (`--ignored`, hit real Alpaca, close the app first): `live_mutual_exclusion_handoff` (ADR-0001), `live_crypto_and_stock_concurrent` (ADR-0002)
 - **Windows cross-build (from macOS):** `CARGO_TARGET_DIR=/tmp/alpaca_win_target cargo build --release --target x86_64-pc-windows-gnu`. The space-free target dir is REQUIRED — MinGW `dlltool`/`windres` choke on the repo's "Codeing stuff" path. [build.rs](build.rs) embeds the `.exe` icon from [assets/icon.ico](assets/icon.ico) (regenerate from the logo with [assets/make-ico.sh](assets/make-ico.sh)) by driving `x86_64-w64-mingw32-windres` directly — it no-ops for every non-Windows target (macOS universal, CI Linux), so it never touches those builds. winit also auto-adopts the embedded icon as the runtime window/taskbar icon on Windows.
 
